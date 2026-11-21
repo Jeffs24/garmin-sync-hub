@@ -1,8 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Zwift maps · garmin-sync-hub{% endblock %}
+{% import "partials/ui.html" as ui %}
+{% block title %}{{ "Account" if tab == "account" else "Pairs" }} · Zwift · garmin-sync-hub{% endblock %}
 {% block head %}
 {% if busy %}<meta http-equiv="refresh" content="5">{% endif %}
 <style>
+    .card { margin-bottom: 16px; }
     .zw-actions { display: flex; gap: 6px; flex-wrap: wrap; }
     .zw-msg { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
     .zw-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -13,14 +15,16 @@
 
 {% block content %}
 <div class="page-header">
-    <h1>Zwift maps</h1>
-    <p>Adds the Zwift map to the activity recorded by your watch, in Garmin Connect.</p>
+    <h1>Zwift</h1>
+    <p>Adds the Zwift map to the activity your watch recorded, in Garmin Connect.</p>
 </div>
+{{ ui.zwift_tabs("/zwift/account" if tab == "account" else "/zwift") }}
 
 {% if not garmin_connected %}
-<div class="toast toast-error">Garmin is not connected. <a href="/settings">Connect it in Settings</a>.</div>
+<div class="toast toast-error">Garmin is not connected. <a href="/settings#garmin">Connect it in Settings</a>.</div>
 {% endif %}
 
+{% if tab == "pairs" %}
 <div class="card">
     <div class="zw-row" style="justify-content: space-between;">
         <div>
@@ -39,6 +43,8 @@
     {% if last_error %}<p class="st-failed zw-msg">Last error: {{ last_error }}</p>{% endif %}
 </div>
 
+{% endif %}
+{% if tab == "account" %}
 <div class="card">
     {% if zwift_connected %}
     <div class="zw-row" style="justify-content: space-between;">
@@ -89,6 +95,8 @@
     {% if upload_results %}<ul class="zw-msg" style="margin: 8px 0 0 18px;">{% for r in upload_results %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}
 </div>
 
+{% endif %}
+{% if tab == "pairs" %}
 {% if rows %}
 <div class="card" style="padding: 0; overflow-x: auto;">
     <table>
@@ -123,6 +131,7 @@
     </table>
 </div>
 {% else %}
-<div class="card"><p class="zw-msg">No watch + Zwift pair found yet.</p></div>
+<div class="card"><p class="zw-msg">No watch + Zwift pair found yet. Connect your Zwift account or upload Zwift FIT files in <a href="/zwift/account">Account and files</a>.</p></div>
+{% endif %}
 {% endif %}
 {% endblock %}

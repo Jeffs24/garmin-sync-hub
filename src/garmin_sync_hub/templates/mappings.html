@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% block title %}Exercise Mappings · garmin-sync-hub{% endblock %}
+{% import "partials/ui.html" as ui %}
+{% block title %}Mappings · Liftosaur · garmin-sync-hub{% endblock %}
 
 {% block head %}
 <style>
@@ -27,9 +28,11 @@
 
 {% block content %}
 <div class="page-header">
-    <h1>Exercise Mappings</h1>
-    <p>{{ total }} Liftosaur exercises mapped to Garmin FIT categories. When you upload a workout, each exercise is translated so it displays correctly in Garmin Connect.</p>
+    <h1>Liftosaur</h1>
+    <p>Your Liftosaur workouts as Garmin strength activities, with exercises, sets and heart rate.</p>
 </div>
+{{ ui.liftosaur_tabs("/liftosaur/mappings") }}
+<p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 20px;">{{ total }} Liftosaur exercises mapped to Garmin FIT categories. When you upload a workout, each exercise is translated so it displays correctly in Garmin Connect.</p>
 
 {% if unmapped %}
 <!-- Unmapped exercises with inline mapping -->
@@ -107,7 +110,7 @@
     </summary>
     <div style="margin-top: 16px;">
         <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.7;">
-            <strong>Exercise name:</strong> Must match exactly as shown on your <a href="/workouts">Workouts</a> page.<br>
+            <strong>Exercise name:</strong> Must match exactly as shown on your <a href="/liftosaur/workouts">Workouts</a> page.<br>
             <strong>Category:</strong> Pick the closest Garmin exercise type. When you select one, available sub-exercises are shown below.<br>
             <strong>Sub ID:</strong> Use <strong>0</strong> for generic, or pick from the list that appears when you select a category.
             <br><span style="font-size: 11px;">Reference: <a href="https://developer.garmin.com/fit/overview/" target="_blank" rel="noopener">Garmin FIT SDK</a></span>

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import re
@@ -18,7 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
 
-from garmin_sync_hub import db
+from garmin_sync_hub import activity, db
 from garmin_sync_hub.auth import (
     SESSION_COOKIE,
     auth_enabled,
@@ -30,6 +31,9 @@ from garmin_sync_hub.config import get_update_existing, is_configured, load_conf
 from garmin_sync_hub.liftosaur.sync import sync
 
 logger = logging.getLogger("garmin_sync_hub")
+
+# The request being served, so every page can highlight its place in the navigation.
+_current_request: contextvars.ContextVar[Request | None] = contextvars.ContextVar("current_request", default=None)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -56,6 +60,7 @@ _jinja_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape
 def _render(template_name: str, **ctx) -> HTMLResponse:
     t = _jinja_env.get_template(template_name)
     ctx.setdefault("auth_enabled", auth_enabled())
+    ctx.setdefault("request", _current_request.get())
     return HTMLResponse(t.render(**ctx))
 
 
@@ -236,6 +241,14 @@ def _record_sync_log(result: dict, trigger: str = "manual") -> None:
     )
 
 
+def _record_failure(workout_id: str, title: str, error: str) -> None:
+    """Remember a failed workout for the activity feed, without masking the error."""
+    try:
+        db.record_failure(workout_id, title or workout_id, error)
+    except Exception:  # noqa: BLE001
+        logger.debug("Could not record the failure of %s", workout_id)
+
+
 def _get_autosync_status() -> dict[str, Any]:
     """Build auto-sync status dict for templates."""
     config = load_config()
@@ -312,6 +325,7 @@ _AUTH_EXEMPT_PATHS = {
 @app.middleware("http")
 async def check_setup(request: Request, call_next):
     global _is_configured_cache
+    _current_request.set(request)
     path = request.url.path
     if path == "/favicon.ico" or path.startswith("/static"):
         return await call_next(request)
@@ -377,51 +391,94 @@ async def logout():
 
 # ── Pages ────────────────────────────────────────────────────────────────────
 
+def _liftosaur_summary(config: dict) -> dict[str, Any]:
+    """Counts and auto-sync state of the Liftosaur module, without slow API calls when possible."""
+    configured = bool(config.get("liftosaur_api_key"))
+    synced = db.get_synced_count()
+    total = 0
+    if configured:
+        try:
+            # Cached count first (instant), Liftosaur API otherwise
+            _db = db.get_db()
+            cached = _db.get_app_config("workout_total")
+            if cached and isinstance(cached, dict):
+                total = cached.get("count", 0)
+            else:
+                from garmin_sync_hub.liftosaur.liftosaur import LiftosaurClient
+
+                total = LiftosaurClient(api_key=config.get("liftosaur_api_key")).get_workout_count()
+                _db.set_app_config("workout_total", {"count": total})
+        except Exception:
+            pass
+    sync_log = db.get_sync_log(1)
+    return {
+        "configured": configured,
+        "synced": synced,
+        "total": total,
+        "pending": max(0, total - synced),
+        "failed": len(db.get_db().get_failures()),
+        "auto_sync": _get_autosync_status(),
+        "last_run": sync_log[0] if sync_log else None,
+    }
+
+
+def _activity_feed() -> list:
+    _db = db.get_db()
+    return activity.build_feed(_db.get_all_synced(), _db.get_failures(), zwift_module.store.all())
+
+
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
+async def overview(request: Request, feed: str = "all"):
     config = load_config()
-    synced_count = db.get_synced_count()
-    recent = db.get_recent_synced(5)
-
-    garmin_connected = _has_garmin_tokens(config)
-
-    workout_total = 0
-    matched_count = synced_count  # Use DB count (fast) instead of Garmin API (slow)
-    try:
-        # Try cached count from DB first (instant), fall back to Liftosaur API
-        _db = db.get_db()
-        cached = _db.get_app_config("workout_total")
-        if cached and isinstance(cached, dict):
-            workout_total = cached.get("count", 0)
-        else:
-            from garmin_sync_hub.liftosaur.liftosaur import LiftosaurClient
-
-            client = LiftosaurClient(api_key=config.get("liftosaur_api_key"))
-            workout_total = client.get_workout_count()
-            _db.set_app_config("workout_total", {"count": workout_total})
-    except Exception:
-        pass
-    mapping_count = 0
-    try:
-        from garmin_sync_hub.liftosaur.mapper import EXERCISE_TO_GARMIN, _custom_mappings, _ensure_custom_loaded
-        _ensure_custom_loaded()
-        mapping_count = len(EXERCISE_TO_GARMIN) + len(_custom_mappings)
-    except Exception:
-        pass
+    if feed not in activity.FILTERS:
+        feed = "all"
+    events = _activity_feed()
     return _render(
-        "dashboard.html",
-        synced_count=synced_count,
-        matched_count=matched_count,
-        workout_total=workout_total,
-        recent=recent,
-        auto_sync=_get_autosync_status(),
-        sync_log=db.get_sync_log(10),
-        mapping_count=mapping_count,
-        garmin_connected=garmin_connected,
+        "overview.html",
+        garmin_connected=_has_garmin_tokens(config),
+        lift=_liftosaur_summary(config),
         zwift=zwift_module.summary(),
-        liftosaur_configured=bool(config.get("liftosaur_api_key")),
+        feed=feed,
+        events=activity.filter_events(events, feed)[:10],
+        feed_counts=activity.counts(events),
         request=request,
     )
+
+
+ACTIVITY_PAGE_SIZE = 50
+
+
+@app.get("/activity", response_class=HTMLResponse)
+async def activity_page(request: Request, source: str = "all", page: int = 1):
+    if source not in activity.FILTERS:
+        source = "all"
+    events = _activity_feed()
+    shown = activity.filter_events(events, source)
+    pages = max(1, -(-len(shown) // ACTIVITY_PAGE_SIZE))
+    page = max(1, min(page, pages))
+    start = (page - 1) * ACTIVITY_PAGE_SIZE
+    return _render(
+        "activity.html",
+        source=source,
+        events=shown[start:start + ACTIVITY_PAGE_SIZE],
+        feed_counts=activity.counts(events),
+        page=page,
+        pages=pages,
+        total=len(shown),
+        request=request,
+    )
+
+
+# Pages that moved when the app got one section per source.
+for _old, _new in (
+    ("/dashboard", "/"),
+    ("/history", "/activity?source=liftosaur"),
+    ("/workouts", "/liftosaur/workouts"),
+    ("/mappings", "/liftosaur/mappings"),
+    ("/liftosaur", "/liftosaur/workouts"),
+):
+    app.add_api_route(_old, (lambda target=_new: RedirectResponse(target, status_code=307)),
+                      methods=["GET"], include_in_schema=False)
 
 
 
@@ -552,7 +609,7 @@ async def api_garmin_export_token_file():
     return FileResponse(path, filename=path.name, media_type="application/json")
 
 
-@app.get("/workouts", response_class=HTMLResponse)
+@app.get("/liftosaur/workouts", response_class=HTMLResponse)
 async def workouts_page(request: Request):
     config = load_config()
     workouts = []
@@ -640,7 +697,7 @@ async def workouts_page(request: Request):
         logger.error("Failed to fetch workouts: %s", e)
         fetch_error = str(e)
     hr_fusion = config.get("hr_fusion", {}).get("enabled", True)
-    return _render("workouts.html", workouts=workouts, hr_fusion_enabled=hr_fusion, page=page, page_count=page_count, fetch_error=fetch_error)
+    return _render("workouts.html", workouts=workouts, hr_fusion_enabled=hr_fusion, page=page, page_count=page_count, fetch_error=fetch_error, lift=_liftosaur_summary(config), request=request)
 
 
 @app.get("/api/workout/{workout_id}/hr", response_class=HTMLResponse)
@@ -757,7 +814,7 @@ async def sync_page(request: Request):
     return RedirectResponse("/")
 
 
-@app.get("/mappings", response_class=HTMLResponse)
+@app.get("/liftosaur/mappings", response_class=HTMLResponse)
 async def mappings_page(request: Request):
     from garmin_sync_hub.liftosaur.mapper import EXERCISE_TO_GARMIN, _custom_mappings, _ensure_custom_loaded
 
@@ -789,11 +846,6 @@ async def mappings_page(request: Request):
     )
 
 
-@app.get("/history", response_class=HTMLResponse)
-async def history_page(request: Request):
-    return _render("history.html", total=db.get_synced_count(), history=db.get_recent_synced(50))
-
-
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     config = load_config()
@@ -807,6 +859,7 @@ async def settings_page(request: Request):
     return _render(
         "settings.html",
         config=config,
+        zwift_cfg=zwift_module.cfg,
         unmapped=sorted(unmapped.items(), key=lambda x: -x[1]),
         garmin_connected=_has_garmin_tokens(config),
         is_cloud=False,
@@ -871,7 +924,7 @@ async def api_save_mapping(request: Request):
     _unmapped_cache = None
 
     cat_label = _get_cat_names().get(category, f"Category {category}")
-    return HTMLResponse(f'<div class="toast toast-success">Mapped "{exercise_name}" → {cat_label} ({category}:{subcategory}). <a href="/mappings">Reload</a></div>')
+    return HTMLResponse(f'<div class="toast toast-success">Mapped "{exercise_name}" → {cat_label} ({category}:{subcategory}). <a href="/liftosaur/mappings">Reload</a></div>')
 
 
 @app.post("/api/mapping/delete", response_class=HTMLResponse)
@@ -900,7 +953,7 @@ async def api_delete_mapping(request: Request):
     global _unmapped_cache
     _unmapped_cache = None
 
-    return HTMLResponse(f'<div class="toast toast-success">Deleted mapping for "{exercise_name}". <a href="/mappings">Reload</a></div>')
+    return HTMLResponse(f'<div class="toast toast-success">Deleted mapping for "{exercise_name}". <a href="/liftosaur/mappings">Reload</a></div>')
 
 
 @app.get("/api/validate-liftosaur")
@@ -1059,11 +1112,12 @@ async def api_sync_single(request: Request, workout_id: str):
             if aid:
                 rename_activity(garmin_client, aid, workout["title"])
                 set_description(garmin_client, aid, generate_description(workout, calories=result.get("calories"), avg_hr=result.get("avg_hr")))
-            db.mark_synced(workout_id=workout_id, garmin_activity_id=str(aid) if aid else None, title=workout["title"], calories=result.get("calories"), avg_hr=result.get("avg_hr"), source_updated_at=workout.get("updated_at"))
+            db.mark_synced(workout_id=workout_id, garmin_activity_id=str(aid) if aid else None, title=workout["title"], calories=result.get("calories"), avg_hr=result.get("avg_hr"), source_updated_at=workout.get("updated_at"), action="updated" if existing_id else "uploaded")
 
         start = (workout.get("start_time") or "")[:16]
         return HTMLResponse(f'<tr><td><span class="badge badge-success">✓ Synced</span></td><td>{start}</td><td><strong>{workout["title"]}</strong></td><td>{len(workout.get("exercises", []))}</td><td></td></tr>')
     except Exception as e:
+        _record_failure(workout_id, (locals().get("workout") or {}).get("title", ""), str(e))
         return HTMLResponse(f'<td colspan="5" style="color: var(--pico-del-color);">Failed: {e}</td>')
 
 
@@ -1154,8 +1208,16 @@ async def api_sync_one(request: Request):
     if not _acquire_sync_lock():
         return JSONResponse({"error": "Sync already running", "busy": True})
 
+    from garmin_sync_hub.liftosaur.liftosaur import LiftosaurAuthError
+
     try:
         return await _do_sync_one(request)
+    except LiftosaurAuthError:
+        # Raised while listing workouts, before any workout is picked
+        return JSONResponse({"synced": 0, "error": "Liftosaur API key is invalid or expired.", "remaining": -1, "done": False}, status_code=401)
+    except Exception as e:  # noqa: BLE001 - answer in JSON so the page can show it
+        logger.exception("Sync failed")
+        return JSONResponse({"synced": 0, "error": f"Sync failed: {str(e)[:200]}", "remaining": -1, "done": False}, status_code=500)
     finally:
         _sync_executing.release()
 
@@ -1264,6 +1326,7 @@ async def _do_sync_one(request: Request):
             calories=result.get("calories"),
             avg_hr=result.get("avg_hr"),
             source_updated_at=unsynced.get("updated_at"),
+            action="updated" if existing_id else "uploaded",
         )
 
         remaining = client.get_workout_count() - db.get_synced_count()
@@ -1292,6 +1355,7 @@ async def _do_sync_one(request: Request):
         # Other upload errors — skip this workout for now, don't mark as synced
         # Track in-memory so we don't retry it in the same sync session
         _failed_ids.add(unsynced["id"])
+        _record_failure(unsynced["id"], unsynced.get("title", ""), err)
         remaining = client.get_workout_count() - db.get_synced_count() - len(_failed_ids)
         logger.warning("Skipping failed workout %s (will retry next session), %d remaining", unsynced["title"], remaining)
         return JSONResponse({"synced": 0, "skipped_error": True, "title": unsynced["title"], "remaining": max(0, remaining), "done": remaining <= 0})

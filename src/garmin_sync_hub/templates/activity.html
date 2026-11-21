@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% import "partials/ui.html" as ui %}
+{% block title %}Activity · garmin-sync-hub{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Activity</h1>
+    <p>Everything sent to Garmin Connect, from every source. Click an activity for its details.</p>
+</div>
+
+{{ ui.feed_tabs("/activity", "source", source, feed_counts) }}
+
+<div class="card" style="padding: 0;">
+    {{ ui.feed_table(events, "Nothing needs your attention." if source == "attention" else "Nothing synced yet.") }}
+</div>
+
+{% if pages > 1 %}
+{% set q = ("source=" ~ source ~ "&") if source != "all" else "" %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; font-size: 13px; color: var(--text-muted);">
+    <span>{{ total }} entries · page {{ page }} of {{ pages }}</span>
+    <div style="display: flex; gap: 8px;">
+        {% if page > 1 %}<a class="btn btn-secondary btn-sm" href="/activity?{{ q }}page={{ page - 1 }}">&larr; Newer</a>{% endif %}
+        {% if page < pages %}<a class="btn btn-secondary btn-sm" href="/activity?{{ q }}page={{ page + 1 }}">Older &rarr;</a>{% endif %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}

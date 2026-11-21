@@ -1,0 +1,80 @@
+{# Liftosaur sync controls: counts, Sync now, auto-sync. Needs `lift` (see _liftosaur_summary). #}
+<style>
+    .toggle-track { position: relative; width: 44px; height: 24px; background: var(--border); border-radius: 12px; cursor: pointer; transition: background 0.2s; flex-shrink: 0; }
+    .toggle-track.active { background: var(--accent); }
+    .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; background: #fff; border-radius: 50%; transition: transform 0.2s; }
+    .toggle-track.active .toggle-thumb { transform: translateX(20px); }
+    .interval-select { padding: 4px 8px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; font-family: var(--font); min-height: 32px; }
+    .htmx-request #autosync-spinner { display: inline-flex !important; }
+    .htmx-request.toggle-track, .htmx-request#autosync-interval { opacity: 0.5; pointer-events: none; }
+</style>
+<div class="card src-liftosaur" style="margin-bottom: 20px; border-top: 3px solid var(--src);">
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+        <div>
+            <div style="font-size: 18px; font-weight: 700;">
+                {{ lift.synced }} synced
+                {% if lift.pending %}· <span class="state-pending" id="stat-pending">{{ lift.pending }}</span> <span class="state-pending">pending</span>{% endif %}
+                {% if lift.failed %}· <a href="/activity?source=attention" class="state-failed">{{ lift.failed }} failed</a>{% endif %}
+            </div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                {{ lift.total }} workouts in Liftosaur.
+                {% if lift.last_run %}Last run <time data-local data-time datetime="{{ lift.last_run.time|replace(' ', 'T') }}Z">{{ lift.last_run.time }} UTC</time> ({{ lift.last_run.trigger }}).{% endif %}
+            </div>
+        </div>
+        <div style="display: flex; gap: 8px;">
+            <button id="sync-now-btn" class="btn btn-primary btn-sm" onclick="syncNow()">
+                {% if lift.pending > 1 %}Sync {{ lift.pending }} workouts{% elif lift.pending == 1 %}Sync 1 workout{% else %}Sync now{% endif %}
+            </button>
+            <button id="sync-stop-btn" class="btn btn-secondary btn-sm" onclick="stopSync()" style="display: none;">Stop</button>
+        </div>
+    </div>
+    <div id="sync-progress" style="display: none; margin-top: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary);">
+            <span class="spinner"></span><span id="sync-progress-text">Starting sync…</span>
+        </div>
+        <div style="margin-top: 6px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden;">
+            <div id="sync-progress-bar" style="height: 100%; width: 0%; background: var(--src); transition: width 0.3s;"></div>
+        </div>
+    </div>
+    {% if lift.pending > 1 %}
+    <p style="font-size: 12px; color: var(--text-muted); margin-top: 8px; line-height: 1.6;">
+        Uploads one workout at a time (about {{ ((lift.pending * 8) / 60) | round(0) | int }} min for {{ lift.pending }}). You can leave this page: the next sync picks up where it stopped.
+    </p>
+    {% endif %}
+    <div id="sync-result"></div>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--border-subtle);">
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <div id="autosync-toggle" class="toggle-track {% if lift.auto_sync.enabled %}active{% endif %}"
+                 hx-post="/api/toggle-autosync" hx-target="#autosync-status" hx-swap="innerHTML"
+                 hx-vals='js:{"enabled": document.getElementById("autosync-toggle").classList.contains("active"), "interval": (document.getElementById("autosync-interval") && document.getElementById("autosync-interval").value) || "120"}'
+                 hx-disabled-elt="this, #autosync-interval" hx-indicator="#autosync-spinner, #autosync-status"
+                 onclick="this.classList.toggle('active')" role="switch"
+                 aria-checked="{{ 'true' if lift.auto_sync.enabled else 'false' }}" aria-label="Auto-sync">
+                <div class="toggle-thumb"></div>
+            </div>
+            <span style="font-size: 13px; color: var(--text-secondary);">Auto-sync <span style="color: var(--text-muted); font-size: 11px;">(new workouts only)</span></span>
+            <span id="autosync-spinner" class="htmx-indicator" style="display: none; font-size: 12px; color: var(--text-muted);">Saving…</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+            <label for="autosync-interval" style="font-size: 12px; color: var(--text-muted);">Every</label>
+            <select id="autosync-interval" class="interval-select"
+                    hx-post="/api/toggle-autosync" hx-target="#autosync-status" hx-swap="innerHTML"
+                    hx-vals='js:{"enabled": document.getElementById("autosync-toggle").classList.contains("active"), "interval": (document.getElementById("autosync-interval") && document.getElementById("autosync-interval").value) || "120"}'
+                    hx-disabled-elt="this, #autosync-toggle" hx-indicator="#autosync-spinner, #autosync-status" hx-trigger="change">
+                {% for minutes, label in [(30, '30 min'), (60, '1 hour'), (120, '2 hours'), (240, '4 hours'), (360, '6 hours'), (720, '12 hours'), (1440, '24 hours')] %}
+                <option value="{{ minutes }}" {{ 'selected' if lift.auto_sync.interval_minutes == minutes }}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+    <div id="autosync-status" style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+        {% if lift.auto_sync.enabled %}
+            {% if lift.auto_sync.last_sync %}Last: {{ lift.auto_sync.last_sync }}{% endif %}
+            {% if lift.auto_sync.next_sync %} · Next: {{ lift.auto_sync.next_sync }}{% endif %}
+        {% endif %}
+    </div>
+</div>
+<script>
+{% include "partials/liftosaur_sync.js" %}
+</script>

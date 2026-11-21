@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% import "partials/ui.html" as ui %}
+{% block title %}Overview · garmin-sync-hub{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Overview</h1>
+    <p>What each source sent to Garmin Connect, and what's waiting.</p>
+</div>
+
+<div class="source-grid">
+    {# Garmin: the destination of every sync #}
+    <div class="card source-card src-garmin">
+        <div class="source-name">Garmin Connect</div>
+        {% if garmin_connected %}
+        <div class="source-main state-ok">Connected</div>
+        <div class="source-meta">Every sync writes to this account.</div>
+        <div class="source-actions"><a href="/settings#garmin" class="btn btn-secondary btn-sm">Manage</a></div>
+        {% else %}
+        <div class="source-main state-pending">Not connected</div>
+        <div class="source-meta">Connect Garmin to sync Liftosaur workouts and add Zwift maps.</div>
+        <div class="source-actions"><a href="/settings#garmin" class="btn btn-primary btn-sm">Connect Garmin</a></div>
+        {% endif %}
+    </div>
+
+    {# Liftosaur #}
+    <div class="card source-card src-liftosaur">
+        <div class="source-name">Liftosaur</div>
+        {% if lift.configured %}
+        <div class="source-main">
+            {{ lift.synced }} synced{% if lift.pending %} · <span class="state-pending"><span id="stat-pending">{{ lift.pending }}</span> pending</span>{% endif %}
+        </div>
+        <div class="source-meta">
+            {% if lift.failed %}<a href="/?feed=attention" class="state-failed">{{ lift.failed }} failed</a> · {% endif %}
+            {% if lift.auto_sync.enabled %}Auto-sync every {{ lift.auto_sync.interval_minutes }} min{% if lift.auto_sync.next_sync %} · next {{ lift.auto_sync.next_sync }}{% endif %}{% else %}Auto-sync off{% endif %}
+        </div>
+        <div class="source-actions">
+            <button id="sync-now-btn" class="btn btn-primary btn-sm" onclick="syncNow()" {% if not garmin_connected %}title="Connect Garmin first"{% endif %}>Sync now</button>
+            <a href="/liftosaur/workouts" class="btn btn-secondary btn-sm">Workouts</a>
+        </div>
+        <div id="sync-progress" style="display: none; font-size: 12px; color: var(--text-secondary);">
+            <span class="spinner" style="display: inline-block; width: 12px; height: 12px; vertical-align: -2px;"></span>
+            <span id="sync-progress-text">Starting sync…</span>
+        </div>
+        <div id="sync-result"></div>
+        {% else %}
+        <div class="source-main state-muted">Not set up</div>
+        <div class="source-meta">Add your Liftosaur API key to turn your workouts into Garmin strength activities.</div>
+        <div class="source-actions"><a href="/settings#liftosaur" class="btn btn-secondary btn-sm">Add API key</a></div>
+        {% endif %}
+    </div>
+
+    {# Zwift #}
+    <div class="card source-card src-zwift">
+        <div class="source-name">Zwift</div>
+        <div class="source-main">
+            {{ zwift.merged }} map{{ '' if zwift.merged == 1 else 's' }} added{% if zwift.waiting %} · <span class="state-pending">{{ zwift.waiting }} ready</span>{% endif %}
+        </div>
+        <div class="source-meta">
+            {% if zwift.failed %}<a href="/?feed=attention" class="state-failed">{{ zwift.failed }} failed</a> · {% endif %}
+            {% if zwift.busy %}<span class="state-pending">{{ zwift.busy }} in progress</span> · {% endif %}
+            Scan every {{ zwift.scan_interval_minutes }} min{% if zwift.next_scan %} · next <time data-local data-time datetime="{{ zwift.next_scan.isoformat() }}"></time>{% endif %}
+            · {{ 'automatic merge' if zwift.auto_merge else 'merge on demand' }}
+            · Zwift account {{ 'connected' if zwift.zwift_connected else 'not connected' }}
+        </div>
+        {% if zwift.last_error %}<div class="source-meta state-failed">Last scan: {{ zwift.last_error }}</div>{% endif %}
+        <div class="source-actions">
+            {% if zwift.waiting %}
+            <a href="/zwift" class="btn btn-primary btn-sm">Review {{ zwift.waiting }} pair{{ '' if zwift.waiting == 1 else 's' }}</a>
+            {% else %}
+            <a href="/zwift" class="btn btn-secondary btn-sm">Pairs</a>
+            {% endif %}
+            {% if not zwift.zwift_connected %}<a href="/zwift/account" class="btn btn-secondary btn-sm">Connect Zwift</a>{% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="card" style="padding-bottom: 8px;">
+    <div class="card-header" style="margin-bottom: 4px;">
+        <span class="card-title">Recent activity</span>
+        <a href="/activity{% if feed != 'all' %}?source={{ feed }}{% endif %}" style="font-size: 13px;">All activity &rarr;</a>
+    </div>
+    {{ ui.feed_tabs("/", "feed", feed, feed_counts) }}
+    {{ ui.feed_table(events, "Nothing to show here yet." if feed != "attention" else "Nothing needs your attention.") }}
+</div>
+
+{% if lift.configured %}
+<script>
+{% include "partials/liftosaur_sync.js" %}
+</script>
+{% endif %}
+{% endblock %}

@@ -34,7 +34,9 @@ STATUS_LABELS = {
     "ignored": "Ignored",
 }
 
-_ACTION_PATHS = ("/scan", "/merge-all", "/upload", "/login", "/logout", "/sync")
+_PAIR_ACTIONS = ("/scan", "/merge-all")
+_ACCOUNT_ACTIONS = ("/upload", "/login", "/logout", "/sync")
+ACCOUNT = "/zwift/account"
 
 
 def _render(name: str, request: Request, **ctx) -> HTMLResponse:
@@ -86,6 +88,8 @@ class ZwiftModule:
         self._stop = threading.Event()
         self.state = {
             "last_error": None,
+            "last_scan": None,
+            "next_scan": None,
             "upload_results": [],
             "zwift": {"running": False, "counts": None, "last": None, "error": None,
                       "login_error": None, "since": None, "finished_at": None},
@@ -120,6 +124,9 @@ class ZwiftModule:
             except Exception as e:  # noqa: BLE001
                 log.warning("Automatic Zwift login failed: %s", e)
         while not self._stop.is_set():
+            now = datetime.now(timezone.utc)
+            self.state["last_scan"] = now
+            self.state["next_scan"] = now + timedelta(minutes=self.cfg.scan_interval_minutes)
             if self.garmin.has_tokens():
                 try:
                     self.service.scan()
@@ -154,9 +161,15 @@ class ZwiftModule:
         rows = self.store.all()
         return {
             "waiting": sum(1 for r in rows if r["status"] in ("detected", "simulated")),
+            "busy": sum(1 for r in rows if r["status"] in ("running", "queued")),
             "merged": sum(1 for r in rows if r["status"] == "merged"),
             "failed": sum(1 for r in rows if r["status"] == "failed"),
             "zwift_connected": self.zwift.connected(),
+            "auto_merge": self.cfg.auto_merge,
+            "scan_interval_minutes": self.cfg.scan_interval_minutes,
+            "last_scan": self.state["last_scan"],
+            "next_scan": self.state["next_scan"],
+            "last_error": self.state["last_error"],
         }
 
     # --- routes -------------------------------------------------------------
@@ -165,23 +178,33 @@ class ZwiftModule:
         router = APIRouter(prefix="/zwift")
         m = self
 
-        for path in _ACTION_PATHS:
-            router.add_api_route(path, lambda: RedirectResponse("/zwift", status_code=303),
-                                 methods=["GET"], include_in_schema=False)
+        for paths, target in ((_PAIR_ACTIONS, "/zwift"), (_ACCOUNT_ACTIONS, ACCOUNT)):
+            for path in paths:
+                router.add_api_route(path, lambda target=target: RedirectResponse(target, status_code=303),
+                                     methods=["GET"], include_in_schema=False)
 
-        @router.get("", response_class=HTMLResponse)
-        def page(request: Request) -> HTMLResponse:
+        def render_tab(request: Request, tab: str) -> HTMLResponse:
             rows = m.store.all()
-            busy = m.state["zwift"]["running"] or any(r["status"] in ("running", "queued") for r in rows)
-            results = m.state["upload_results"]
-            m.state["upload_results"] = []
+            pairs_busy = any(r["status"] in ("running", "queued") for r in rows)
+            busy = m.state["zwift"]["running"] if tab == "account" else pairs_busy
+            results = m.state["upload_results"] if tab == "account" else []
+            if tab == "account":
+                m.state["upload_results"] = []
             return _render(
-                "zwift.html", request, cfg=m.cfg, rows=rows, busy=busy,
+                "zwift.html", request, tab=tab, cfg=m.cfg, rows=rows, busy=busy,
                 waiting=sum(1 for r in rows if r["status"] in ("detected", "simulated")),
                 garmin_connected=m.garmin.has_tokens(), zwift_connected=m.zwift.connected(),
                 zs=m.state["zwift"], last_error=m.state["last_error"], upload_results=results,
                 status_labels=STATUS_LABELS,
             )
+
+        @router.get("", response_class=HTMLResponse)
+        def page(request: Request) -> HTMLResponse:
+            return render_tab(request, "pairs")
+
+        @router.get("/account", response_class=HTMLResponse)
+        def account_page(request: Request) -> HTMLResponse:
+            return render_tab(request, "account")
 
         @router.post("/scan")
         def scan() -> RedirectResponse:
@@ -217,7 +240,7 @@ class ZwiftModule:
                     log.exception("Upload of %s failed", f.filename)
                     results.append(f"{f.filename}: error ({e})")
             m.state["upload_results"] = results
-            return RedirectResponse("/zwift", status_code=303)
+            return RedirectResponse(ACCOUNT, status_code=303)
 
         @router.post("/login")
         def zwift_login(email: str = Form(...), password: str = Form(...)) -> RedirectResponse:
@@ -226,12 +249,12 @@ class ZwiftModule:
                 m.state["zwift"]["login_error"] = None
             except Exception as e:  # noqa: BLE001
                 m.state["zwift"]["login_error"] = f"Zwift login refused: {e}"
-            return RedirectResponse("/zwift", status_code=303)
+            return RedirectResponse(ACCOUNT, status_code=303)
 
         @router.post("/logout")
         def zwift_logout() -> RedirectResponse:
             m.zwift.logout()
-            return RedirectResponse("/zwift", status_code=303)
+            return RedirectResponse(ACCOUNT, status_code=303)
 
         @router.post("/sync")
         def zwift_sync_route(since: str = Form(...)) -> RedirectResponse:
@@ -241,7 +264,7 @@ class ZwiftModule:
                 raise HTTPException(400, "invalid date")
             if m.zwift.connected() and m.garmin.has_tokens():
                 threading.Thread(target=m.zwift_sync, args=(start,), daemon=True).start()
-            return RedirectResponse("/zwift", status_code=303)
+            return RedirectResponse(ACCOUNT, status_code=303)
 
         @router.post("/pairs/{target_id}/{action}")
         def act(target_id: int, action: str) -> RedirectResponse:

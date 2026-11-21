@@ -107,6 +107,16 @@ class SQLiteDatabase(Database):
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sync_failures (
+                workout_id TEXT PRIMARY KEY,
+                title TEXT,
+                error TEXT,
+                failed_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
         self._migrate_schema(conn)
         conn.commit()
         return conn
@@ -148,6 +158,9 @@ class SQLiteDatabase(Database):
         self._rename_column(conn, "synced_workouts", _LEGACY_UPDATED_COLUMN, "source_updated_at")
         self._rename_column(conn, "hr_cache", _LEGACY_ID_COLUMN, "workout_id")
         self._rename_column(conn, "custom_mappings", _LEGACY_NAME_COLUMN, "exercise_name")
+        if "action" not in self._column_names(conn, "synced_workouts"):
+            # "uploaded" (new Garmin activity) or "updated" (sets written into a watch activity)
+            conn.execute("ALTER TABLE synced_workouts ADD COLUMN action TEXT")
 
         row = conn.execute(
             "SELECT credentials FROM platform_credentials WHERE platform = ?",
@@ -221,19 +234,42 @@ class SQLiteDatabase(Database):
         calories: int | None = None,
         avg_hr: int | None = None,
         source_updated_at: str | None = None,
+        action: str | None = None,
     ) -> None:
         conn = self._get_conn()
         conn.execute(
             """
             INSERT OR REPLACE INTO synced_workouts (
-                workout_id, garmin_activity_id, title, calories, avg_hr, source_updated_at
+                workout_id, garmin_activity_id, title, calories, avg_hr, source_updated_at, action
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (workout_id, garmin_activity_id, title, calories, avg_hr, source_updated_at),
+            (workout_id, garmin_activity_id, title, calories, avg_hr, source_updated_at, action),
+        )
+        conn.execute("DELETE FROM sync_failures WHERE workout_id = ?", (workout_id,))
+        conn.commit()
+        conn.close()
+
+    def record_failure(self, workout_id: str, title: str, error: str) -> None:
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO sync_failures (workout_id, title, error, failed_at) VALUES (?, ?, ?, datetime('now'))",
+            (workout_id, title, error[:500]),
         )
         conn.commit()
         conn.close()
+
+    def get_failures(self) -> list[dict]:
+        conn = self._get_conn()
+        rows = conn.execute("SELECT * FROM sync_failures ORDER BY failed_at DESC").fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def get_all_synced(self) -> list[dict]:
+        conn = self._get_conn()
+        rows = conn.execute("SELECT * FROM synced_workouts ORDER BY synced_at DESC").fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
 
     def get_stale_synced(self, workouts: list[dict]) -> list[str]:
         """Return synced workout IDs edited in Liftosaur since sync."""

@@ -5,7 +5,12 @@ Garmin Connect automations in one self-hosted app, with one Garmin login:
 - **Liftosaur → Garmin**: turns your Liftosaur workouts into Garmin strength activities, with exercises, sets, reps and weights mapped to Garmin's exercise catalog, calories, and heart rate merged from your watch.
 - **Zwift maps**: adds the Zwift map to the activity your watch recorded during a Zwift session, so you keep the watch's full data (heart rate, footpod, running dynamics, Training Effect) *and* get the map.
 
-It runs as one Docker container with a web UI.
+It runs as one Docker container with a web UI:
+
+- **Overview**: one card per source (Garmin, Liftosaur, Zwift) with its state, what is pending and a quick action, plus the latest activity.
+- **Activity**: everything sent to Garmin, from every source, with tabs to filter by source or show only what needs your attention (failures, pairs waiting to be merged).
+- **Liftosaur** and **Zwift**: one section per source, with its own pages.
+- **Settings**: one tab per source.
 
 ## Install (Docker compose)
 
@@ -26,9 +31,9 @@ Set `HUB_PASSWORD` in `.env` to protect the web UI with a password if it can be 
 
 ## Liftosaur → Garmin
 
-The **Workouts** page lists your Liftosaur workouts; sync them one by one, the recent ones, or all of them. Auto-sync runs on a schedule you choose on the dashboard.
+**Liftosaur → Workouts** lists your Liftosaur workouts; sync them one by one or all at once (**Sync now**, also on the Overview). Auto-sync runs on a schedule you choose on the same page.
 
-- **Mappings**: Liftosaur exercises are mapped to Garmin's exercise categories. Unmapped exercises show as "Unknown" on Garmin; map them from the Mappings page.
+- **Mappings**: Liftosaur exercises are mapped to Garmin's exercise categories. Unmapped exercises show as "Unknown" on Garmin; map them from **Liftosaur → Mappings**.
 - **Heart rate**: when your watch recorded the session, its heart rate is merged into the uploaded workout.
 - **Update existing activities**: if your watch already recorded the strength session, the workout's exercises and sets are written into that activity instead of creating a new one.
 
@@ -47,11 +52,11 @@ For each pair of *watch activity without a map* + *Zwift activity with a map* th
 
 Every Garmin step is checked against the activity list, since Garmin sometimes answers with an error (such as a 504) for a request that went through. If an earlier attempt left the watch activity deleted without a replacement, clicking **Merge** again imports it from the backups.
 
-The **Zwift** page lists the pairs found. **Simulate** builds the merged file without touching Garmin, and **Preview** shows it as Garmin will get it: map, stats and charts.
+**Zwift → Pairs** lists the pairs found. **Simulate** builds the merged file without touching Garmin, and **Preview** shows it as Garmin will get it: map, stats and charts.
 
 ### Zwift account and history
 
-Connect your Zwift account on the Zwift page and click **Sync history** from a date: the app lists your Zwift activities through Zwift's unofficial Companion API and downloads the FIT file of each one that overlaps a watch activity without a map. Once connected, new Zwift activities are also fetched at each scan. Only the Zwift tokens are stored, in `data/zwift_tokens.json`.
+Connect your Zwift account in **Zwift → Account and files** and click **Sync history** from a date: the app lists your Zwift activities through Zwift's unofficial Companion API and downloads the FIT file of each one that overlaps a watch activity without a map. Once connected, new Zwift activities are also fetched at each scan. Only the Zwift tokens are stored, in `data/zwift_tokens.json`.
 
 Without a Zwift account, you can upload Zwift FIT files by hand: from zwift.com (activity → Download .fit) or from your Strava data export (`activities/` folder, `.fit.gz` accepted).
 

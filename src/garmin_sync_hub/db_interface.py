@@ -25,8 +25,9 @@ class Database(ABC):
         calories: int | None = None,
         avg_hr: int | None = None,
         source_updated_at: str | None = None,
+        action: str | None = None,
     ) -> None:
-        """Record a successfully synced workout."""
+        """Record a successfully synced workout ("uploaded" or "updated")."""
 
     @abstractmethod
     def get_stale_synced(self, workouts: list[dict]) -> list[str]:

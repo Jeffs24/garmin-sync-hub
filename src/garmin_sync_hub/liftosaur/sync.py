@@ -523,6 +523,7 @@ def sync(
                     calories=result.get("calories"),
                     avg_hr=result.get("avg_hr"),
                     source_updated_at=workout.get("updated_at"),
+                    action="updated" if existing_id else "uploaded",
                 )
                 stats["synced"] += 1
                 logger.info("  ✓ Synced → Garmin activity %s", activity_id)
@@ -530,6 +531,10 @@ def sync(
         except Exception as e:
             logger.error("  ✗ Failed to sync %s: %s", wid, e)
             stats["failed"] += 1
+            try:
+                db.record_failure(wid, title, str(e))
+            except Exception:  # noqa: BLE001 - never hide the sync error
+                logger.debug("Could not record the failure of %s", wid)
 
     if stats["unmapped"]:
         logger.warning("\nUnmapped exercises: %s", ", ".join(stats["unmapped"]))

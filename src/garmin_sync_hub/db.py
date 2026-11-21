@@ -51,10 +51,16 @@ def mark_synced(
     calories: int | None = None,
     avg_hr: int | None = None,
     source_updated_at: str | None = None,
+    action: str | None = None,
     **kw,
 ) -> None:
-    """Record a successfully synced workout."""
-    return get_db().mark_synced(workout_id, garmin_activity_id, title, calories, avg_hr, source_updated_at)
+    """Record a successfully synced workout ("uploaded" or "updated" on Garmin)."""
+    return get_db().mark_synced(workout_id, garmin_activity_id, title, calories, avg_hr, source_updated_at, action)
+
+
+def record_failure(workout_id: str, title: str, error: str) -> None:
+    """Remember a workout that failed to sync; cleared when it syncs."""
+    return get_db().record_failure(workout_id, title, error)
 
 
 def unsync(workout_id: str, **kw) -> bool:

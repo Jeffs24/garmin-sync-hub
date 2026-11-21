@@ -1,0 +1,59 @@
+{# Shared UI pieces. Import with: {% import "partials/ui.html" as ui %} #}
+
+{# Sub-pages of a section: items = [(href, label), ...] #}
+{% macro subtabs(items, current) -%}
+<nav class="tabs" aria-label="Section pages">
+    {% for href, label in items %}
+    <a href="{{ href }}" {% if href == current %}class="active" aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+</nav>
+{%- endmacro %}
+
+{% macro liftosaur_tabs(current) -%}
+{{ subtabs([("/liftosaur/workouts", "Workouts"), ("/liftosaur/mappings", "Mappings")], current) }}
+{%- endmacro %}
+
+{% macro zwift_tabs(current) -%}
+{{ subtabs([("/zwift", "Pairs"), ("/zwift/account", "Account and files")], current) }}
+{%- endmacro %}
+
+{# Feed filters: links to base_url?param=key #}
+{% macro feed_tabs(base_url, param, current, counts) -%}
+{% set labels = {"all": "All", "liftosaur": "Liftosaur", "zwift": "Zwift", "attention": "Needs attention"} %}
+<nav class="tabs" aria-label="Filter activity">
+    {% for key, label in labels.items() %}
+    <a href="{{ base_url }}{% if key != 'all' %}?{{ param }}={{ key }}{% endif %}" {% if key == current %}class="active" aria-current="true"{% endif %}>
+        {{ label }}<span class="count {% if key == 'attention' and counts.get(key) %}alert{% endif %}">{{ counts.get(key, 0) }}</span>
+    </a>
+    {% endfor %}
+</nav>
+{%- endmacro %}
+
+{% macro feed_table(events, empty_message) -%}
+{% if events %}
+<div style="overflow-x: auto;">
+<table class="feed">
+    <thead><tr><th style="width: 130px;">When</th><th class="col-flow" style="width: 180px;">Flow</th><th>Activity</th><th style="width: 200px;">Result</th></tr></thead>
+    <tbody>
+    {% for e in events %}
+    <tr>
+        <td class="when"><time data-local data-time datetime="{{ e.iso }}">{{ e.when.strftime('%Y-%m-%d %H:%M') }} UTC</time></td>
+        <td class="col-flow"><span class="flow src-{{ e.source }}">{{ e.source_label }}</span></td>
+        <td class="title">
+            <span class="flow flow-inline src-{{ e.source }}">{{ e.source_label }}</span>
+            {% if e.link %}<a href="{{ e.link }}">{{ e.title }}</a>{% else %}<strong>{{ e.title }}</strong>{% endif %}
+            {% if e.detail %}<div class="detail">{{ e.detail }}</div>{% endif %}
+        </td>
+        <td>
+            <span class="state-{{ e.state }}" style="font-weight: 600; font-size: 13px;">{{ e.result }}</span>
+            {% if e.garmin_url %}<div class="detail"><a href="{{ e.garmin_url }}" target="_blank" rel="noopener">View on Garmin &nearr;</a></div>{% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<div class="empty">{{ empty_message }}</div>
+{% endif %}
+{%- endmacro %}
