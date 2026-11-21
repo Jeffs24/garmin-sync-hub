@@ -32,7 +32,7 @@ The **Workouts** page lists your Liftosaur workouts; sync them one by one, the r
 - **Heart rate**: when your watch recorded the session, its heart rate is merged into the uploaded workout.
 - **Update existing activities**: if your watch already recorded the strength session, the workout's exercises and sets are written into that activity instead of creating a new one.
 
-Command line (inside the container: `docker compose exec garmin-sync-hub garmin-sync-hub <command>`): `sync`, `status`, `list`, `unmapped`, `map`, `unsync`.
+Command line (inside the container: `docker compose exec garmin-sync-hub garmin-sync-hub <command>`): `sync`, `status`, `list`, `unmapped`, `map`, `unsync`, `init` (interactive setup), `serve` (web UI), `export-garmin-token`.
 
 ## Zwift maps
 
@@ -113,4 +113,19 @@ pytest
 
 ## Credits
 
-The Liftosaur module is based on [liftosaur2garmin](https://github.com/drkostas/liftosaur2garmin) by Konstantinos Georgiou (MIT). MIT license.
+garmin-sync-hub reuses code from these projects:
+
+| Project | Author | License | What comes from it |
+|---|---|---|---|
+| [drkostas/hevy2garmin](https://github.com/drkostas/hevy2garmin) | Konstantinos Georgiou | MIT | the original Garmin sync pipeline: strength FIT generation, exercise mapping to Garmin's catalog, heart rate merge, calorie estimation, web UI and CLI |
+| [Zettt/liftosaur2garmin](https://github.com/Zettt/liftosaur2garmin) | Andreas Zeitler | MIT | the port of hevy2garmin to Liftosaur: Liftosaur API client, Liftosaur exercise names, workout normalization |
+| [Jeffs24/liftosaur2garmin](https://github.com/Jeffs24/liftosaur2garmin) | Jeffs24 | MIT | the fork of Zettt/liftosaur2garmin the Liftosaur module was taken from (Docker image, fixes) |
+| [Jeffs24/zwift-map-merge](https://github.com/Jeffs24/zwift-map-merge) | Jeffs24 | MIT | the whole Zwift module: FIT reader/writer, map merge, pairing, preview, Zwift Companion API client |
+
+Libraries and services used as is:
+
+- [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) (MIT): Garmin Connect login and API calls.
+- [FastAPI](https://fastapi.tiangolo.com), [Jinja2](https://jinja.palletsprojects.com), [htmx](https://htmx.org) and [Leaflet](https://leafletjs.com) for the web UI; map tiles © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors.
+- The Liftosaur REST API ([liftosaur.com/doc/api](https://www.liftosaur.com/doc/api)).
+
+garmin-sync-hub is released under the MIT license (see [LICENSE](LICENSE)).
