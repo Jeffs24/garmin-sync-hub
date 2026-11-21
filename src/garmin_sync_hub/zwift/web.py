@@ -1,0 +1,286 @@
+"""Web pages and background jobs of the Zwift map module (mounted under /zwift)."""
+from __future__ import annotations
+
+import html
+import logging
+import threading
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from jinja2 import Environment, FileSystemLoader
+
+from ..auth import auth_enabled
+from ..garmin_session import GarminAuthRequired, shared_session
+from .config import Config
+from .preview import summarize
+from .service import Service
+from .store import Store
+from .zwift_api import ZwiftClient
+
+log = logging.getLogger(__name__)
+
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
+
+STATUS_LABELS = {
+    "detected": "Detected",
+    "running": "Running…",
+    "queued": "Queued",
+    "simulated": "Simulated",
+    "merged": "Merged",
+    "failed": "Failed",
+    "ignored": "Ignored",
+}
+
+_ACTION_PATHS = ("/scan", "/merge-all", "/upload", "/login", "/logout", "/sync")
+
+
+def _render(name: str, request: Request, **ctx) -> HTMLResponse:
+    ctx.setdefault("auth_enabled", auth_enabled())
+    return HTMLResponse(_env.get_template(name).render(request=request, **ctx))
+
+
+def svg_chart(name: str, points: list[tuple[float, float]], invert: bool = False) -> str:
+    """Small line chart as inline SVG (x = minutes)."""
+    w, h, pad = 640, 120, 4
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    x0, x1 = min(xs), max(xs) or 1
+    y0, y1 = min(ys), max(ys)
+    if y1 - y0 < 1e-9:
+        y1 = y0 + 1
+
+    def px(x: float, y: float) -> str:
+        fx = pad + (x - x0) / ((x1 - x0) or 1) * (w - 2 * pad)
+        fy = (y - y0) / (y1 - y0)
+        fy = fy if invert else 1 - fy
+        return f"{fx:.1f},{pad + fy * (h - 2 * pad):.1f}"
+
+    line = " ".join(px(x, y) for x, y in points)
+    fmt = (lambda v: f"{int(v)}:{int(v % 1 * 60):02d}") if name.startswith("Pace") else (lambda v: f"{v:.0f}")
+    top, bottom = (y0, y1) if invert else (y1, y0)
+    label = html.escape(name)
+    return (
+        f"<div class='chart'><div style='display:flex;justify-content:space-between'><b>{label}</b>"
+        f"<span class='zw-msg'>{fmt(bottom)} – {fmt(top)}</span></div>"
+        f"<svg viewBox='0 0 {w} {h}' preserveAspectRatio='none' role='img' aria-label='{label}'>"
+        f"<polyline points='{line}' fill='none' stroke='var(--accent)' stroke-width='1.5' "
+        "vector-effect='non-scaling-stroke'/></svg>"
+        "<div class='zw-msg' style='display:flex;justify-content:space-between'><span>0 min</span>"
+        f"<span>{x1:.0f} min</span></div></div>"
+    )
+
+
+class ZwiftModule:
+    """Everything the Zwift module needs at runtime: service, store, Zwift client, scheduler."""
+
+    def __init__(self, cfg: Config | None = None):
+        self.cfg = cfg or Config.from_env()
+        self.garmin = shared_session()
+        self.store = Store(self.cfg.db_path)
+        self.service = Service(self.cfg, self.garmin, self.store)
+        self.zwift = ZwiftClient(self.cfg.zwift_token_file)
+        self._sync_lock = threading.Lock()
+        self._stop = threading.Event()
+        self.state = {
+            "last_error": None,
+            "upload_results": [],
+            "zwift": {"running": False, "counts": None, "last": None, "error": None,
+                      "login_error": None, "since": None, "finished_at": None},
+        }
+        self.router = self._build_router()
+
+    # --- background work ----------------------------------------------------
+
+    def zwift_sync(self, since: datetime) -> None:
+        """Run a Zwift history sync; only one at a time."""
+        zs = self.state["zwift"]
+        if not self._sync_lock.acquire(blocking=False):
+            return
+        zs.update(running=True, error=None, since=since.date().isoformat(), counts=None, last=None)
+
+        def progress(counts, message):
+            zs.update(counts=dict(counts), last=message)
+        try:
+            zs["counts"] = self.service.sync_zwift(self.zwift, since, progress)
+        except Exception as e:  # noqa: BLE001
+            log.exception("Zwift sync failed")
+            zs["error"] = str(e)
+        finally:
+            zs["running"] = False
+            zs["finished_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            self._sync_lock.release()
+
+    def _loop(self) -> None:
+        if not self.zwift.connected() and self.cfg.zwift_email and self.cfg.zwift_password:
+            try:
+                self.zwift.login(self.cfg.zwift_email, self.cfg.zwift_password)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Automatic Zwift login failed: %s", e)
+        while not self._stop.is_set():
+            if self.garmin.has_tokens():
+                try:
+                    self.service.scan()
+                    if self.zwift.connected() and self.cfg.zwift_auto_sync:
+                        self.zwift_sync(datetime.now(timezone.utc) - timedelta(days=self.cfg.scan_days))
+                    self.service.merge_pending()
+                    self.state["last_error"] = None
+                except Exception as e:  # noqa: BLE001
+                    log.exception("Zwift scan failed")
+                    self.state["last_error"] = str(e)
+            self._stop.wait(self.cfg.scan_interval_minutes * 60)
+
+    def start(self) -> None:
+        self._stop.clear()
+        threading.Thread(target=self._loop, name="zwift-scan", daemon=True).start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _run_bg(self, target_id: int, fn) -> None:
+        self.store.set_status(target_id, "running", None)
+
+        def job():
+            try:
+                fn(target_id)
+            except Exception:  # noqa: BLE001 - status already recorded
+                log.exception("Action on %s failed", target_id)
+        threading.Thread(target=job, daemon=True).start()
+
+    def summary(self) -> dict:
+        """Counts for the dashboard."""
+        rows = self.store.all()
+        return {
+            "waiting": sum(1 for r in rows if r["status"] in ("detected", "simulated")),
+            "merged": sum(1 for r in rows if r["status"] == "merged"),
+            "failed": sum(1 for r in rows if r["status"] == "failed"),
+            "zwift_connected": self.zwift.connected(),
+        }
+
+    # --- routes -------------------------------------------------------------
+
+    def _build_router(self) -> APIRouter:
+        router = APIRouter(prefix="/zwift")
+        m = self
+
+        for path in _ACTION_PATHS:
+            router.add_api_route(path, lambda: RedirectResponse("/zwift", status_code=303),
+                                 methods=["GET"], include_in_schema=False)
+
+        @router.get("", response_class=HTMLResponse)
+        def page(request: Request) -> HTMLResponse:
+            rows = m.store.all()
+            busy = m.state["zwift"]["running"] or any(r["status"] in ("running", "queued") for r in rows)
+            results = m.state["upload_results"]
+            m.state["upload_results"] = []
+            return _render(
+                "zwift.html", request, cfg=m.cfg, rows=rows, busy=busy,
+                waiting=sum(1 for r in rows if r["status"] in ("detected", "simulated")),
+                garmin_connected=m.garmin.has_tokens(), zwift_connected=m.zwift.connected(),
+                zs=m.state["zwift"], last_error=m.state["last_error"], upload_results=results,
+                status_labels=STATUS_LABELS,
+            )
+
+        @router.post("/scan")
+        def scan() -> RedirectResponse:
+            try:
+                m.service.scan()
+                m.state["last_error"] = None
+            except GarminAuthRequired:
+                m.state["last_error"] = "Garmin is not connected"
+            except Exception as e:  # noqa: BLE001
+                m.state["last_error"] = str(e)
+            return RedirectResponse("/zwift", status_code=303)
+
+        @router.post("/merge-all")
+        def merge_all() -> RedirectResponse:
+            waiting = [r["target_id"] for r in m.store.all() if r["status"] in ("detected", "simulated")]
+            for tid in waiting:
+                m.store.set_status(tid, "queued", "Waiting for its turn")
+            if waiting:
+                threading.Thread(target=m.service.merge_all, daemon=True).start()
+            return RedirectResponse("/zwift", status_code=303)
+
+        @router.post("/upload")
+        async def upload(files: list[UploadFile] = File(...)) -> RedirectResponse:
+            results = []
+            for f in files[:200]:
+                data = await f.read()
+                try:
+                    results.append(m.service.add_source_file(f.filename or "file.fit", data))
+                except GarminAuthRequired:
+                    results.append("Garmin is not connected")
+                    break
+                except Exception as e:  # noqa: BLE001
+                    log.exception("Upload of %s failed", f.filename)
+                    results.append(f"{f.filename}: error ({e})")
+            m.state["upload_results"] = results
+            return RedirectResponse("/zwift", status_code=303)
+
+        @router.post("/login")
+        def zwift_login(email: str = Form(...), password: str = Form(...)) -> RedirectResponse:
+            try:
+                m.zwift.login(email, password)
+                m.state["zwift"]["login_error"] = None
+            except Exception as e:  # noqa: BLE001
+                m.state["zwift"]["login_error"] = f"Zwift login refused: {e}"
+            return RedirectResponse("/zwift", status_code=303)
+
+        @router.post("/logout")
+        def zwift_logout() -> RedirectResponse:
+            m.zwift.logout()
+            return RedirectResponse("/zwift", status_code=303)
+
+        @router.post("/sync")
+        def zwift_sync_route(since: str = Form(...)) -> RedirectResponse:
+            try:
+                start = datetime.fromisoformat(since).replace(tzinfo=timezone.utc)
+            except ValueError:
+                raise HTTPException(400, "invalid date")
+            if m.zwift.connected() and m.garmin.has_tokens():
+                threading.Thread(target=m.zwift_sync, args=(start,), daemon=True).start()
+            return RedirectResponse("/zwift", status_code=303)
+
+        @router.post("/pairs/{target_id}/{action}")
+        def act(target_id: int, action: str) -> RedirectResponse:
+            if not m.store.get(target_id):
+                raise HTTPException(404)
+            if action == "simulate":
+                m._run_bg(target_id, m.service.simulate)
+            elif action == "merge":
+                m._run_bg(target_id, m.service.merge)
+            elif action == "ignore":
+                m.service.ignore(target_id)
+            else:
+                raise HTTPException(404)
+            return RedirectResponse("/zwift", status_code=303)
+
+        @router.get("/pairs/{target_id}/merged.fit")
+        def download(target_id: int) -> FileResponse:
+            path = m.cfg.backup_dir / str(target_id) / f"{target_id}_merged.fit"
+            if not path.exists():
+                raise HTTPException(404)
+            return FileResponse(path, filename=f"{target_id}_merged.fit", media_type="application/octet-stream")
+
+        @router.get("/pairs/{target_id}/preview", response_class=HTMLResponse)
+        def preview(request: Request, target_id: int) -> HTMLResponse:
+            row = m.store.get(target_id)
+            if not row:
+                raise HTTPException(404)
+            path = m.cfg.backup_dir / str(target_id) / f"{target_id}_merged.fit"
+            if not path.exists():
+                return _render("zwift_preview.html", request, row=row, has_file=False, pv=summarize_empty(),
+                               charts=[], delete_source=m.cfg.delete_source)
+            pv = summarize(path.read_bytes())
+            charts = [svg_chart(n, pts, invert=n.startswith("Pace")) for n, pts in pv.series.items()]
+            return _render("zwift_preview.html", request, row=row, has_file=True, pv=pv, charts=charts,
+                           delete_source=m.cfg.delete_source)
+
+        return router
+
+
+def summarize_empty():
+    from .preview import Preview
+    return Preview()

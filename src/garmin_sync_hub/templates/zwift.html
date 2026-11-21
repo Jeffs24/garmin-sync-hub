@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Zwift maps · garmin-sync-hub{% endblock %}
+{% block head %}
+{% if busy %}<meta http-equiv="refresh" content="5">{% endif %}
+<style>
+    .zw-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .zw-msg { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+    .zw-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .zw-row .form-input { max-width: 260px; }
+    .st-merged { color: #34d399; } .st-failed { color: #f87171; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Zwift maps</h1>
+    <p>Adds the Zwift map to the activity recorded by your watch, in Garmin Connect.</p>
+</div>
+
+{% if not garmin_connected %}
+<div class="toast toast-error">Garmin is not connected. <a href="/settings">Connect it in Settings</a>.</div>
+{% endif %}
+
+<div class="card">
+    <div class="zw-row" style="justify-content: space-between;">
+        <div>
+            Mode {% if cfg.auto_merge %}<b>automatic</b>: every detected pair is merged{% else %}<b>manual</b>: nothing changes until you click “Merge”{% endif %}.
+            Scans every {{ cfg.scan_interval_minutes }} min over the last {{ cfg.scan_days }} days.
+        </div>
+        <div class="zw-actions">
+            <form method="post" action="/zwift/scan"><button class="btn btn-secondary btn-sm">Scan now</button></form>
+            {% if waiting %}
+            <form method="post" action="/zwift/merge-all" onsubmit="return confirm('Merge all {{ waiting }} pairs on Garmin?')">
+                <button class="btn btn-primary btn-sm">Merge all ({{ waiting }})</button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+    {% if last_error %}<p class="st-failed zw-msg">Last error: {{ last_error }}</p>{% endif %}
+</div>
+
+<div class="card">
+    {% if zwift_connected %}
+    <div class="zw-row" style="justify-content: space-between;">
+        <div class="card-title">Zwift account: connected</div>
+        <form method="post" action="/zwift/logout"><button class="btn btn-secondary btn-sm">Disconnect Zwift</button></form>
+    </div>
+    <p class="zw-msg">
+        {% if cfg.zwift_auto_sync %}New Zwift activities are fetched at each scan ({{ cfg.scan_days }} days).{% else %}Automatic fetch is off (ZWIFT_AUTO_SYNC=false).{% endif %}
+        To catch up on older activities, sync the history from a date. Only Zwift activities that overlap a watch activity
+        without a map are downloaded; the others are skipped. Pairs found show up below: nothing changes on Garmin until you merge them.
+    </p>
+    <form method="post" action="/zwift/sync" class="zw-row" style="margin-top: 12px;">
+        <label class="form-label" style="margin: 0;">Since <input class="form-input" type="date" name="since" required value="2020-01-01"></label>
+        <button class="btn btn-primary btn-sm" {% if zs.running %}disabled{% endif %}>Sync history</button>
+    </form>
+    {% set c = zs.counts or {} %}
+    {% if zs.running %}
+    <p style="margin-top: 12px;">Syncing since {{ zs.since }}… {{ c.listed or 0 }} Zwift activities listed, {{ c.seen or 0 }} checked,
+        {{ c.downloaded or 0 }} downloaded, {{ c.paired or 0 }} paired. <span class="zw-msg">(the page refreshes by itself)</span></p>
+    {% elif zs.counts is not none or zs.error %}
+    <p class="zw-msg">Last sync ({{ zs.finished_at }}, since {{ zs.since }}): {{ c.listed or 0 }} listed, {{ c.downloaded or 0 }} downloaded,
+        {{ c.paired or 0 }} paired, {{ c.errors or 0 }} errors.</p>
+    {% if zs.error %}<p class="st-failed zw-msg">{{ zs.error }}</p>{% endif %}
+    {% endif %}
+    {% if zs.last %}<p class="zw-msg">{{ zs.last }}</p>{% endif %}
+    {% else %}
+    <div class="card-title">Zwift account</div>
+    <p class="zw-msg">Connect Zwift to fetch your Zwift FIT files automatically, including your whole history.
+        This uses Zwift's unofficial Companion API. Your password is not stored, only the tokens.</p>
+    {% if zs.login_error %}<p class="st-failed zw-msg">{{ zs.login_error }}</p>{% endif %}
+    <form method="post" action="/zwift/login" class="zw-row" style="margin-top: 12px;">
+        <input class="form-input" name="email" type="email" placeholder="Zwift email" required>
+        <input class="form-input" name="password" type="password" placeholder="Zwift password" required>
+        <button class="btn btn-primary btn-sm">Connect Zwift</button>
+    </form>
+    {% endif %}
+</div>
+
+<div class="card">
+    <div class="card-title">Older activities</div>
+    <p class="zw-msg">Zwift copy no longer on Garmin? Upload its FIT files here, downloaded from zwift.com
+        (activity → “Download .fit”) or taken from your Strava data export (<code>activities/</code> folder,
+        <code>.fit.gz</code> accepted). Each file is paired with the watch activity without a map that overlaps it.</p>
+    <form method="post" action="/zwift/upload" enctype="multipart/form-data" class="zw-row" style="margin-top: 12px;">
+        <input type="file" name="files" accept=".fit,.gz" multiple required>
+        <button class="btn btn-secondary btn-sm">Upload</button>
+    </form>
+    {% if upload_results %}<ul class="zw-msg" style="margin: 8px 0 0 18px;">{% for r in upload_results %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}
+</div>
+
+{% if rows %}
+<div class="card" style="padding: 0; overflow-x: auto;">
+    <table>
+        <thead><tr><th>Start</th><th>Watch</th><th>Zwift</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+        {% for r in rows %}
+            <tr>
+                <td style="color: var(--text-muted); font-size: 13px; white-space: nowrap;">{{ (r.start_utc or '')[:16].replace('T', ' ') }} UTC</td>
+                <td><div style="font-weight: 600;">{{ r.target_name }}</div><div class="zw-msg">#{{ r.target_id }}</div></td>
+                <td>{{ r.source_name }}{% if r.source_id %}<div class="zw-msg">#{{ r.source_id }}</div>{% endif %}</td>
+                <td>
+                    <span class="badge {% if r.status == 'merged' %}badge-success{% elif r.status == 'failed' %}badge-error{% else %}badge-pending{% endif %}">{{ status_labels.get(r.status, r.status) }}</span>
+                    {% if r.new_id %}<div><a href="https://connect.garmin.com/modern/activity/{{ r.new_id }}" target="_blank" rel="noopener">View on Garmin</a></div>{% endif %}
+                    {% if r.message %}<div class="zw-msg">{{ r.message }}</div>{% endif %}
+                </td>
+                <td>
+                    <div class="zw-actions">
+                    {% if r.status in ('detected', 'simulated', 'failed') %}
+                        <form method="post" action="/zwift/pairs/{{ r.target_id }}/simulate"><button class="btn btn-secondary btn-sm">Simulate</button></form>
+                        <form method="post" action="/zwift/pairs/{{ r.target_id }}/merge" onsubmit="return confirm('Replace the watch activity on Garmin with the merged one?')"><button class="btn btn-primary btn-sm">Merge</button></form>
+                        <form method="post" action="/zwift/pairs/{{ r.target_id }}/ignore"><button class="btn btn-secondary btn-sm">Ignore</button></form>
+                    {% endif %}
+                    {% if r.status in ('simulated', 'merged') %}
+                        <a class="btn btn-secondary btn-sm" href="/zwift/pairs/{{ r.target_id }}/preview">Preview</a>
+                        <a class="btn btn-secondary btn-sm" href="/zwift/pairs/{{ r.target_id }}/merged.fit">FIT</a>
+                    {% endif %}
+                    </div>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="card"><p class="zw-msg">No watch + Zwift pair found yet.</p></div>
+{% endif %}
+{% endblock %}

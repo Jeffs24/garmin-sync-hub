@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}{{ row.target_name or 'Activity' }} · Zwift preview{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+    #map { height: 420px; border-radius: var(--radius-sm); }
+    .zw-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+    .zw-stat { display: flex; flex-direction: column; }
+    .zw-stat span { color: var(--text-muted); font-size: 12px; }
+    .chart { margin-bottom: 16px; }
+    .chart svg { width: 100%; height: 120px; display: block; background: var(--bg-primary); border-radius: 6px; }
+    .zw-msg { color: var(--text-muted); font-size: 13px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<p><a href="/zwift">← Back</a></p>
+<div class="page-header">
+    <h1>{{ row.target_name or 'Activity' }}</h1>
+    <p>{{ pv.sport }}{% if pv.start %} · {{ pv.start.strftime('%Y-%m-%d %H:%M') }} UTC{% endif %} · map from {{ row.source_name or 'Zwift' }}</p>
+</div>
+
+{% if not has_file %}
+<div class="card"><p>No merged file yet: click <b>Simulate</b> first.</p></div>
+{% else %}
+<div class="card">
+    {% if row.status == 'merged' %}
+    <p>This activity is on Garmin: <a href="https://connect.garmin.com/modern/activity/{{ row.new_id }}" target="_blank" rel="noopener">#{{ row.new_id }}</a>.</p>
+    {% else %}
+    <p>Nothing has changed on Garmin yet. <b>Merge</b> will import this file, then delete the watch activity #{{ row.target_id }}{% if row.source_id and delete_source %} and the Zwift copy #{{ row.source_id }}{% endif %}, and restore the name “{{ row.target_name }}”, description, type and gear.</p>
+    <div class="zw-row" style="display: flex; gap: 8px; margin-top: 12px;">
+        <form method="post" action="/zwift/pairs/{{ row.target_id }}/merge" onsubmit="return confirm('Replace the watch activity on Garmin with the merged one?')"><button class="btn btn-primary btn-sm">Merge</button></form>
+        <a class="btn btn-secondary btn-sm" href="/zwift/pairs/{{ row.target_id }}/merged.fit">Download merged FIT</a>
+    </div>
+    {% endif %}
+</div>
+<div class="card">
+    <div id="map"></div>
+    <p class="zw-msg" style="margin-top: 8px;">Zwift worlds are placed on real coordinates (Watopia is in the Solomon Islands), so the track is drawn over that real place, as Garmin will show it.</p>
+</div>
+<div class="card"><div class="zw-stats">
+    {% for k, v in pv.stats.items() %}<div class="zw-stat"><span>{{ k }}</span><b>{{ v }}</b></div>{% endfor %}
+</div></div>
+<div class="card">{% for chart in charts %}{{ chart|safe }}{% else %}<p class="zw-msg">No data series.</p>{% endfor %}</div>
+<script>
+const track = {{ pv.track|tojson }};
+if (track.length && window.L) {
+    const map = L.map('map', {scrollWheelZoom: false});
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'}).addTo(map);
+    const line = L.polyline(track, {color: '#10b981', weight: 4}).addTo(map);
+    L.circleMarker(track[0], {radius: 6, color: '#3b82f6', fillOpacity: 1}).addTo(map);
+    L.circleMarker(track[track.length - 1], {radius: 6, color: '#ef4444', fillOpacity: 1}).addTo(map);
+    map.fitBounds(line.getBounds(), {padding: [20, 20]});
+} else {
+    document.getElementById('map').innerHTML = '<p class="zw-msg">No GPS track.</p>';
+}
+</script>
+{% endif %}
+{% endblock %}

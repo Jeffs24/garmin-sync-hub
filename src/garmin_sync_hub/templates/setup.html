@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Setup · garmin-sync-hub{% endblock %}
+
+{% block content %}
+<div style="max-width: 620px; margin: 0 auto;">
+    <div class="page-header" style="text-align: center; margin-bottom: 36px;">
+        <img src="/static/favicon.svg" width="56" height="56" alt="garmin-sync-hub" style="border-radius: 14px; margin-bottom: 16px;">
+        <h1>Welcome to garmin-sync-hub</h1>
+        <p>Liftosaur workouts and Zwift maps for Garmin Connect.</p>
+    </div>
+
+    {% if setup_saved and not garmin_connected %}
+    <div class="toast toast-error" style="margin-bottom: 16px;">Settings saved. Connect Garmin to continue.</div>
+    {% endif %}
+
+    <form method="post" action="/setup">
+        <div class="card section">
+            <div class="card-title" style="margin-bottom: 16px;">1. Garmin Connect</div>
+            <div class="form-hint" style="line-height: 1.7; margin-bottom: 12px;">
+                Every module uses this one Garmin connection. Your password is not stored, only the tokens.
+                If Garmin asks for a verification code, the page prompts for it next.
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="garmin_email">Email</label>
+                <input class="form-input" type="email" id="garmin_email" name="garmin_email" placeholder="your@email.com" value="{{ config.get('garmin_email', '') }}" autocomplete="email">
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="garmin_password">Password</label>
+                <input class="form-input" type="password" id="garmin_password" placeholder="Used only for this login" autocomplete="current-password">
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <button type="button" class="btn btn-primary btn-sm" onclick="startGarminLogin()">Connect Garmin</button>
+                {% if garmin_connected %}<span style="font-size: 13px; color: var(--accent);">Garmin is connected.</span>{% endif %}
+            </div>
+            <div id="garmin-login-result" style="margin-top: 8px;"></div>
+            <div id="garmin-mfa-box" style="display: none; margin-top: 14px;">
+                <label class="form-label" for="garmin_mfa_code">Verification Code</label>
+                <div style="display: flex; gap: 8px;">
+                    <input class="form-input" type="text" id="garmin_mfa_code" placeholder="Enter the code from Garmin" inputmode="numeric" autocomplete="one-time-code" style="flex: 1;">
+                    <button type="button" class="btn btn-primary btn-sm" onclick="finishGarminLogin()">Verify</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card section">
+            <div class="card-title" style="margin-bottom: 16px;">2. Liftosaur API Key <span style="font-weight: 400; color: var(--text-muted);">(optional)</span></div>
+            <div class="form-group">
+                <label class="form-label" for="liftosaur_api_key">API Key</label>
+                <div style="display: flex; gap: 8px;">
+                    <input class="form-input" type="text" id="liftosaur_api_key" name="liftosaur_api_key" placeholder="Paste your Liftosaur API key" value="{{ config.get('liftosaur_api_key', '') }}" autocomplete="off" style="flex: 1;">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="validateLiftosaurKey()" style="white-space: nowrap;">Test Key</button>
+                </div>
+                <div id="liftosaur-validate-result" style="margin-top: 4px;"></div>
+                <div class="form-hint" style="line-height: 1.8;">
+                    Only needed to sync Liftosaur workouts. In Liftosaur: <strong>Settings</strong> → <strong>API Keys</strong> → create a key and paste it here.
+                </div>
+            </div>
+        </div>
+
+        <div class="card section">
+            <div class="card-title" style="margin-bottom: 16px;">3. Your Profile</div>
+            <div class="form-hint" style="margin-bottom: 12px;">Used for calorie estimation in Liftosaur FIT files.</div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label" for="weight_kg">Weight (kg)</label>
+                    <input class="form-input" type="number" id="weight_kg" name="weight_kg" value="{{ config.get('user_profile', {}).get('weight_kg', 80) }}" step="0.1">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="birth_year">Birth Year</label>
+                    <input class="form-input" type="number" id="birth_year" name="birth_year" value="{{ config.get('user_profile', {}).get('birth_year', 1990) }}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="sex">Sex</label>
+                    <select class="form-select" id="sex" name="sex">
+                        <option value="male" {{ 'selected' if config.get('user_profile', {}).get('sex', 'male') == 'male' }}>Male</option>
+                        <option value="female" {{ 'selected' if config.get('user_profile', {}).get('sex') == 'female' }}>Female</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center;">
+            Save &amp; Continue
+        </button>
+    </form>
+</div>
+
+<script>
+{% include "partials/garmin_login.js" %}
+
+async function validateLiftosaurKey() {
+    const key = document.getElementById('liftosaur_api_key').value.trim();
+    const result = document.getElementById('liftosaur-validate-result');
+    if (!key) {
+        result.innerHTML = '<span style="font-size: 12px; color: var(--red);">Enter a key first.</span>';
+        return;
+    }
+    result.innerHTML = '<span style="font-size: 12px; color: var(--text-muted);">Testing...</span>';
+    try {
+        const resp = await fetch('/api/validate-liftosaur?key=' + encodeURIComponent(key));
+        if (resp.ok) {
+            const data = await resp.json();
+            result.innerHTML = '<span style="font-size: 12px; color: var(--accent);">&#10003; Valid - ' + data.workout_count + ' workouts found</span>';
+        } else {
+            result.innerHTML = '<span style="font-size: 12px; color: var(--red);">&#10007; Invalid key (HTTP ' + resp.status + ')</span>';
+        }
+    } catch (e) {
+        result.innerHTML = '<span style="font-size: 12px; color: var(--red);">&#10007; Network error</span>';
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,17 @@
+services:
+  garmin-sync-hub:
+    # Published on each GitHub release. Pin a version (e.g. :1.0.0) instead of :latest if you prefer.
+    image: ghcr.io/jeffs24/garmin-sync-hub:latest
+    # To build from source instead, comment out `image` above and uncomment:
+    # build: .
+    container_name: garmin-sync-hub
+    restart: unless-stopped
+    ports:
+      - "8127:8127"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./data:/data
