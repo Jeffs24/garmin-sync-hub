@@ -18,3 +18,26 @@ jobs:
           python-version: "3.12"
       - run: pip install -e .[dev]
       - run: pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: garmin-sync-hub:test
+      - name: Check the installed package
+        run: |
+          docker run --rm --entrypoint python garmin-sync-hub:test -c "
+          import garmin_sync_hub, pathlib
+          root = pathlib.Path(garmin_sync_hub.__file__).parent
+          for f in ('templates/base.html', 'templates/zwift.html', 'templates/partials/garmin_login.js', 'static/favicon.svg'):
+              assert (root / f).is_file(), f
+          print(garmin_sync_hub.__version__)
+          "
+          docker run --rm garmin-sync-hub:test --help
