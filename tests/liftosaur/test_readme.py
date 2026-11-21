@@ -8,8 +8,6 @@ def test_readme_credits_reused_projects():
     for url in (
         "https://github.com/drkostas/hevy2garmin",
         "https://github.com/Zettt/liftosaur2garmin",
-        "https://github.com/Jeffs24/liftosaur2garmin",
-        "https://github.com/Jeffs24/zwift-map-merge",
     ):
         assert url in content
     assert "Konstantinos Georgiou" in content

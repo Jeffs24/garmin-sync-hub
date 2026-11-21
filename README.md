@@ -90,15 +90,6 @@ Everything lives in the `data/` volume (`DATA_DIR`):
 | `zwift_tokens.json` | Zwift tokens |
 | `zwift_backups/` | original and merged FIT files |
 
-## Moving from liftosaur2garmin or zwift-map-merge
-
-Garmin tokens are not compatible: connect Garmin once in the new app. To keep your history:
-
-- **liftosaur2garmin**: copy `.liftosaur2garmin/config.json` to `data/liftosaur.json` and `.liftosaur2garmin/sync.db` to `data/liftosaur.db` (both were in the `l2g-data` volume). `L2G_PASSWORD` still works; `HUB_PASSWORD` is the new name.
-- **zwift-map-merge**: copy `state.db` to `data/zwift.db`, `zwift_tokens.json` to `data/zwift_tokens.json` and `backups/` to `data/zwift_backups/`. The `SCAN_*`, `AUTO_MERGE`… variables are now prefixed with `ZWIFT_`.
-
-Stop the old containers first so that two apps don't act on the same activities.
-
 ## Good to know
 
 - The tool uses the unofficial Garmin Connect API (through [python-garminconnect](https://github.com/cyberjunky/python-garminconnect)) and the unofficial Zwift Companion API. Both can change without notice.
@@ -119,8 +110,6 @@ garmin-sync-hub reuses code from these projects:
 |---|---|---|---|
 | [drkostas/hevy2garmin](https://github.com/drkostas/hevy2garmin) | Konstantinos Georgiou | MIT | the original Garmin sync pipeline: strength FIT generation, exercise mapping to Garmin's catalog, heart rate merge, calorie estimation, web UI and CLI |
 | [Zettt/liftosaur2garmin](https://github.com/Zettt/liftosaur2garmin) | Andreas Zeitler | MIT | the port of hevy2garmin to Liftosaur: Liftosaur API client, Liftosaur exercise names, workout normalization |
-| [Jeffs24/liftosaur2garmin](https://github.com/Jeffs24/liftosaur2garmin) | Jeffs24 | MIT | the fork of Zettt/liftosaur2garmin the Liftosaur module was taken from (Docker image, fixes) |
-| [Jeffs24/zwift-map-merge](https://github.com/Jeffs24/zwift-map-merge) | Jeffs24 | MIT | the whole Zwift module: FIT reader/writer, map merge, pairing, preview, Zwift Companion API client |
 
 Libraries and services used as is:
 
