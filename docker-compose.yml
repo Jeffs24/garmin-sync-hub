@@ -1,6 +1,6 @@
 services:
   garmin-sync-hub:
-    # Published on each GitHub release. Pin a version (e.g. :1.0.0) instead of :latest if you prefer.
+    # Published on each GitHub release. Pin a version (e.g. :0.1.0) instead of :latest if you prefer.
     image: ghcr.io/jeffs24/garmin-sync-hub:latest
     # To build from source instead, comment out `image` above and uncomment:
     # build: .
