@@ -1,7 +1,7 @@
 services:
   garmin-sync-hub:
     # Published on each GitHub release (see the Releases page). Pre-releases are not tagged :latest.
-    image: ghcr.io/jeffs24/garmin-sync-hub:0.1.0
+    image: ghcr.io/jeffs24/garmin-sync-hub:0.2.0
     # To build from source instead, comment out `image` above and uncomment:
     # build: .
     container_name: garmin-sync-hub
