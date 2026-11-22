@@ -38,6 +38,8 @@ class Event:
     detail: str = ""       # error or extra information
     garmin_id: str | None = None
     link: str | None = None  # page with the details in this app
+    retry_at: datetime | None = None  # next automatic retry of a failure
+    retry_by: str = ""     # what retries it ("auto-sync", "auto-merge")
 
     @property
     def source_label(self) -> str:
@@ -109,13 +111,15 @@ def liftosaur_events(synced: Iterable[dict], failures: Iterable[dict]) -> list[E
             state="failed",
             detail=row.get("error") or "",
             link=_workout_link(row.get("workout_id")),
+            retry_at=_parse_time(row["retry_at"]) if row.get("retry_at") else None,
+            retry_by="auto-sync",
         ))
     return events
 
 
 # --- Zwift -------------------------------------------------------------------
 
-_ZWIFT_STATES = {
+ZWIFT_STATES = {
     # status: (result, state)
     "merged": ("Map added", "ok"),
     "failed": ("Failed", "failed"),
@@ -131,7 +135,7 @@ _ZWIFT_STATES = {
 def zwift_events(pairs: Iterable[dict]) -> list[Event]:
     events = []
     for row in pairs:
-        result, state = _ZWIFT_STATES.get(row.get("status", ""), (row.get("status", ""), "muted"))
+        result, state = ZWIFT_STATES.get(row.get("status", ""), (row.get("status", ""), "muted"))
         has_preview = row.get("status") in ("simulated", "merged")
         events.append(Event(
             source="zwift",
@@ -142,6 +146,9 @@ def zwift_events(pairs: Iterable[dict]) -> list[Event]:
             detail=row.get("message") or "",
             garmin_id=str(row["new_id"]) if row.get("new_id") else None,
             link=f"/zwift/pairs/{row['target_id']}/preview" if has_preview else "/zwift",
+            retry_at=(_parse_time(row["retry_at"])
+                      if row.get("status") == "failed" and row.get("retry_at") else None),
+            retry_by="auto-merge",
         ))
     return events
 

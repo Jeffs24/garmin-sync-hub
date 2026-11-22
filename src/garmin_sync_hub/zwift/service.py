@@ -198,6 +198,9 @@ class Service:
         for row in self.store.all():
             if row["status"] in ("detected", "simulated"):
                 self.merge(row["target_id"])
+        for target_id in self.store.due_retries():
+            log.info("Retrying the failed merge of %s", target_id)
+            self.merge(target_id)
 
     # --- simulate / merge ---------------------------------------------------
 
@@ -318,7 +321,7 @@ class Service:
                     log.exception("Recovery from backups failed for %s", target_id)
                 if prep is None:
                     log.exception("Could not prepare %s", target_id)
-                    self.store.set_status(target_id, "failed", f"Preparation: {e}")
+                    self.store.mark_failed(target_id, f"Preparation: {e}")
                     return None
                 # Recovery: an earlier attempt deleted the watch activity but did not import.
                 log.info("Activity %s is no longer on Garmin: importing the saved merged file", target_id)
@@ -330,8 +333,7 @@ class Service:
             steps: list[str] = []
 
             def fail(message: str) -> None:
-                self.store.set_status(target_id, "failed",
-                                      message + f" Backups: {folder}. Click Merge again to retry.")
+                self.store.mark_failed(target_id, message + f" Backups: {folder}.")
 
             new_id = None
             if target_on_garmin:

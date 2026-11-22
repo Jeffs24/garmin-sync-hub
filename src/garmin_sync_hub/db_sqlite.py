@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from garmin_sync_hub.db_interface import Database
@@ -113,7 +113,9 @@ class SQLiteDatabase(Database):
                 workout_id TEXT PRIMARY KEY,
                 title TEXT,
                 error TEXT,
-                failed_at TEXT DEFAULT (datetime('now'))
+                failed_at TEXT DEFAULT (datetime('now')),
+                attempts INTEGER NOT NULL DEFAULT 1,
+                retry_at TEXT
             )
             """
         )
@@ -158,6 +160,10 @@ class SQLiteDatabase(Database):
         self._rename_column(conn, "synced_workouts", _LEGACY_UPDATED_COLUMN, "source_updated_at")
         self._rename_column(conn, "hr_cache", _LEGACY_ID_COLUMN, "workout_id")
         self._rename_column(conn, "custom_mappings", _LEGACY_NAME_COLUMN, "exercise_name")
+        if "attempts" not in self._column_names(conn, "sync_failures"):
+            # Failures in a row and the next automatic retry (see retry.py)
+            conn.execute("ALTER TABLE sync_failures ADD COLUMN attempts INTEGER NOT NULL DEFAULT 1")
+            conn.execute("ALTER TABLE sync_failures ADD COLUMN retry_at TEXT")
         if "action" not in self._column_names(conn, "synced_workouts"):
             # "uploaded" (new Garmin activity) or "updated" (sets written into a watch activity)
             conn.execute("ALTER TABLE synced_workouts ADD COLUMN action TEXT")
@@ -217,6 +223,19 @@ class SQLiteDatabase(Database):
         conn.close()
         return {row["workout_id"]: row["garmin_activity_id"] for row in rows}
 
+    def get_sync_actions(self, workout_ids: list[str]) -> dict[str, str | None]:
+        """workout_id -> "uploaded" (new Garmin activity), "updated" (watch activity) or None (before 0.2.0)."""
+        if not workout_ids:
+            return {}
+        conn = self._get_conn()
+        placeholders = ",".join("?" for _ in workout_ids)
+        rows = conn.execute(
+            f"SELECT workout_id, action FROM synced_workouts WHERE workout_id IN ({placeholders})",
+            workout_ids,
+        ).fetchall()
+        conn.close()
+        return {row["workout_id"]: row["action"] for row in rows}
+
     def get_garmin_id(self, workout_id: str) -> str | None:
         conn = self._get_conn()
         row = conn.execute(
@@ -251,13 +270,30 @@ class SQLiteDatabase(Database):
         conn.close()
 
     def record_failure(self, workout_id: str, title: str, error: str) -> None:
+        from garmin_sync_hub import retry
+
         conn = self._get_conn()
+        row = conn.execute("SELECT attempts FROM sync_failures WHERE workout_id = ?", (workout_id,)).fetchone()
+        attempts = (row["attempts"] if row else 0) + 1
         conn.execute(
-            "INSERT OR REPLACE INTO sync_failures (workout_id, title, error, failed_at) VALUES (?, ?, ?, datetime('now'))",
-            (workout_id, title, error[:500]),
+            """INSERT OR REPLACE INTO sync_failures (workout_id, title, error, failed_at, attempts, retry_at)
+               VALUES (?, ?, ?, datetime('now'), ?, ?)""",
+            (workout_id, title, error[:500], attempts, retry.to_text(retry.next_retry(attempts))),
         )
         conn.commit()
         conn.close()
+
+    def failures_on_hold(self, now=None) -> set[str]:
+        """Failed workouts auto-sync must skip for now: retry not due yet, or no retry left."""
+        from garmin_sync_hub import retry
+
+        now = now or datetime.now(timezone.utc)
+        held = set()
+        for row in self.get_failures():
+            retry_at = retry.parse(row.get("retry_at"))
+            if retry_at is None or retry_at > now:
+                held.add(row["workout_id"])
+        return held
 
     def get_failures(self) -> list[dict]:
         conn = self._get_conn()

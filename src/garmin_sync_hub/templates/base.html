@@ -32,6 +32,11 @@
             --blue-hover: #2563eb;
             --amber: #f59e0b;
             --red: #ef4444;
+            /* State colors, shared by badges, chips, toasts and text */
+            --ok: #34d399; --ok-bg: rgba(16,185,129,0.12);
+            --warn: #fbbf24; --warn-bg: rgba(251,191,36,0.14);
+            --fail: #f87171; --fail-bg: rgba(239,68,68,0.12);
+            --muted-bg: rgba(100,116,139,0.15);
             --radius: 12px;
             --radius-sm: 8px;
             --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -140,9 +145,20 @@
             padding: 3px 10px; border-radius: 100px;
             font-size: 12px; font-weight: 600;
         }
-        .badge-success { background: rgba(16,185,129,0.12); color: #34d399; }
-        .badge-pending { background: rgba(100,116,139,0.15); color: #94a3b8; }
-        .badge-error { background: rgba(239,68,68,0.12); color: #f87171; }
+        .badge-success { background: var(--ok-bg); color: var(--ok); }
+        .badge-pending { background: var(--muted-bg); color: #94a3b8; }
+        .badge-warning { background: var(--warn-bg); color: var(--warn); }
+        .badge-error { background: var(--fail-bg); color: var(--fail); }
+        /* Small action buttons and links next to a status */
+        .chip {
+            display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 6px;
+            font-size: 12px; font-weight: 600; border: none; cursor: pointer; text-decoration: none; font-family: var(--font);
+            background: var(--muted-bg); color: var(--text-secondary);
+        }
+        .chip:disabled { opacity: 0.5; cursor: default; }
+        .chip-ok { background: var(--ok-bg); color: var(--ok); }
+        .chip-warn { background: var(--warn-bg); color: var(--warn); }
+        .chip-fail { background: var(--fail-bg); color: var(--fail); }
 
         /* ── Forms ── */
         .form-group { margin-bottom: 20px; }
@@ -178,6 +194,12 @@
         .toggle-track.active .toggle-thumb { transform: translateX(20px); }
         .interval-select { padding: 4px 8px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; font-family: var(--font); min-height: 32px; }
         .htmx-request.toggle-track, .htmx-request.interval-select { opacity: 0.5; pointer-events: none; }
+        .autosync-block { padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--border-subtle); }
+        .autosync-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .autosync-side { display: flex; align-items: center; gap: 10px; }
+        .autosync-label { font-size: 13px; color: var(--text-secondary); }
+        .autosync-hint { color: var(--text-muted); font-size: 11px; }
+        .autosync-status { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 
         /* ── Toast ── */
         .toast {
@@ -186,8 +208,14 @@
             margin-top: 12px;
             animation: fadeIn 0.2s ease-out;
         }
-        .toast-success { background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.2); color: #34d399; }
-        .toast-error { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2); color: #f87171; }
+        .toast-success { background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.2); color: var(--ok); }
+        .toast-error { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2); color: var(--fail); }
+        .toast-info { background: var(--muted-bg); border: 1px solid rgba(100,116,139,0.3); color: var(--text-secondary); }
+        .toast a { color: inherit; text-decoration: underline; }
+        /* Notices floating above the page (window.notify and ?saved= / ?error=) */
+        #toasts { position: fixed; right: 16px; bottom: 16px; z-index: 100; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px)); }
+        #toasts .toast { margin: 0; display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; background-color: var(--bg-card); box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+        #toasts .toast button { background: none; border: none; color: inherit; cursor: pointer; font-size: 18px; line-height: 1; opacity: 0.7; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
         /* ── Footer ── */
@@ -214,8 +242,8 @@
             padding: 3px 10px; border-radius: 100px; font-size: 12px; font-weight: 600;
             color: var(--src); background: color-mix(in srgb, var(--src) 14%, transparent);
         }
-        .state-ok { color: #34d399; } .state-failed { color: #f87171; }
-        .state-pending { color: var(--amber); } .state-muted { color: var(--text-muted); }
+        .state-ok { color: var(--ok); } .state-failed { color: var(--fail); }
+        .state-pending { color: var(--amber); } .state-warning { color: var(--warn); } .state-muted { color: var(--text-muted); }
 
         /* ── Tabs (filters and sub-pages) ── */
         .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
@@ -227,7 +255,7 @@
         .tabs a:hover, .tabs button:hover { color: var(--text-primary); }
         .tabs a.active, .tabs button.active { color: var(--text-primary); border-bottom-color: var(--accent); }
         .tabs .count { margin-left: 6px; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-        .tabs .count.alert { color: #f87171; }
+        .tabs .count.alert { color: var(--fail); }
 
         /* ── Activity feed ── */
         .feed td { vertical-align: top; }
@@ -301,14 +329,21 @@
         <img src="/static/favicon.svg" width="18" height="18" alt="" style="border-radius: 4px; vertical-align: -3px; margin-right: 4px;">
         <a href="https://github.com/Jeffs24/garmin-sync-hub">garmin-sync-hub</a> &middot; Liftosaur workouts and Zwift maps for Garmin Connect &middot; based on <a href="https://github.com/drkostas/hevy2garmin">hevy2garmin</a> and <a href="https://github.com/Zettt/liftosaur2garmin">liftosaur2garmin</a>
     </footer>
+    {# One-shot notices after a redirect: ?saved=<key> or ?error=<message>. #}
+    {% set notices = {"settings": "Settings saved.", "zwift": "Zwift settings saved.", "workout": "Workout sent to Garmin.", "unsynced": "Workout marked as not synced.", "undone": "Garmin activity deleted, the workout is pending again."} %}
+    {% set q = request.query_params if request else {} %}
+    <div id="toasts" role="status" aria-live="polite">
+        {% if q.get("saved") in notices %}<div class="toast toast-success" data-auto><span>{{ notices[q.get("saved")] }}</span><button type="button" aria-label="Dismiss">&times;</button></div>{% endif %}
+        {% if q.get("error") %}<div class="toast toast-error"><span>{{ q.get("error") }}</span><button type="button" aria-label="Dismiss">&times;</button></div>{% endif %}
+    </div>
     <script>
     // Show <time data-local datetime="..."> in the viewer's time zone.
-    (function () {
+    window.localizeTimes = function (root) {
         var now = new Date();
         var day = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
         var dayYear = new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
         var hm = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
-        document.querySelectorAll('time[data-local]').forEach(function (el) {
+        (root || document).querySelectorAll('time[data-local]').forEach(function (el) {
             var d = new Date(el.getAttribute('datetime'));
             if (isNaN(d)) return;
             var y = new Date(now); y.setDate(now.getDate() - 1);
@@ -319,6 +354,48 @@
             el.textContent = label;
             el.title = d.toLocaleString();
         });
+    };
+    localizeTimes(document);
+    // Content swapped in by HTMX gets local times too.
+    document.body.addEventListener('htmx:afterSettle', function (e) { localizeTimes(e.target.parentNode || document); });
+
+    // Floating notices: notify("Saved", "success" | "error" | "info"). Errors stay until dismissed.
+    (function () {
+        var box = document.getElementById('toasts');
+        function arm(el) {
+            el.querySelector('button').addEventListener('click', function () { el.remove(); });
+            if (el.hasAttribute('data-auto')) setTimeout(function () { el.remove(); }, 5000);
+        }
+        box.querySelectorAll('.toast').forEach(arm);
+        window.notify = function (message, kind) {
+            kind = kind || 'success';
+            var el = document.createElement('div');
+            el.className = 'toast toast-' + kind;
+            if (kind !== 'error') el.setAttribute('data-auto', '');
+            var text = document.createElement('span');
+            text.textContent = message;
+            var close = document.createElement('button');
+            close.type = 'button'; close.setAttribute('aria-label', 'Dismiss'); close.innerHTML = '&times;';
+            el.append(text, close);
+            box.append(el);
+            arm(el);
+        };
+        // Drop ?saved= / ?error= so a reload does not show the notice again.
+        var url = new URL(location.href);
+        if (url.searchParams.has('saved') || url.searchParams.has('error')) {
+            url.searchParams.delete('saved'); url.searchParams.delete('error');
+            history.replaceState(null, '', url.pathname + url.search + url.hash);
+        }
+        // A failed HTMX request says why instead of failing silently.
+        document.body.addEventListener('htmx:responseError', function (e) {
+            var xhr = e.detail.xhr, text = (xhr.responseText || '').trim();
+            try { text = JSON.parse(text).detail || text; } catch (_) {}
+            if (!text || typeof text !== 'string' || text.length > 300 || text.indexOf('<') !== -1) text = 'Request failed (' + xhr.status + ').';
+            notify(text, 'error');
+        });
+        // Server replies can ask for a notice: HX-Trigger: {"notify": {"message": "...", "kind": "error"}}.
+        document.body.addEventListener('notify', function (e) { notify(e.detail.message, e.detail.kind); });
+        document.body.addEventListener('htmx:sendError', function () { notify('Network error: the app did not answer.', 'error'); });
     })();
     </script>
 </body>

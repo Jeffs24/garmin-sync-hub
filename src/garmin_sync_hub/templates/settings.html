@@ -111,8 +111,6 @@
             Connect the Zwift account from <a href="/zwift/account">Zwift → Account and files</a>.
             Changes apply right away. The <code>ZWIFT_*</code> variables in <code>.env</code> only give the starting values.
         </div>
-        {% if zwift_saved %}<div class="toast toast-success" style="margin-bottom: 12px;">Zwift settings saved.</div>{% endif %}
-        {% if zwift_error %}<div class="toast toast-error" style="margin-bottom: 12px;">{{ zwift_error }}</div>{% endif %}
         {% if zwift_cfg %}
         {% macro zw_check(name, label, hint) -%}
         <div class="form-group">
@@ -169,7 +167,6 @@
                 </div>
             </div>
         </details>
-        <button type="submit" class="btn btn-primary" form="zwift-settings" style="margin-top: 16px;">Save Zwift settings</button>
         {% endif %}
     </div>
 
@@ -317,9 +314,9 @@
         </details>
     </div>
 
-    <button type="submit" class="btn btn-primary">
+    <button type="submit" class="btn btn-primary" id="settings-save">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-        Save Settings
+        <span id="settings-save-label">Save settings</span>
     </button>
 </form>
 {# The Zwift tab's fields sit inside the form above but belong to this one (form="zwift-settings"). #}
@@ -356,9 +353,11 @@
         });
         if (form) {
             form.action = "/settings#" + name;
-            // The Zwift tab has its own Save button and form.
-            const save = form.querySelector('button[type="submit"]:not([form])');
-            if (save) save.hidden = name === "zwift";
+            // One Save button per tab: on the Zwift tab it submits the Zwift form.
+            const save = document.getElementById("settings-save");
+            if (name === "zwift") save.setAttribute("form", "zwift-settings"); else save.removeAttribute("form");
+            document.getElementById("settings-save-label").textContent =
+                "Save " + { garmin: "Garmin", liftosaur: "Liftosaur", zwift: "Zwift" }[name] + " settings";
         }
     }
     document.querySelectorAll("[data-tab-button]").forEach(function (b) {

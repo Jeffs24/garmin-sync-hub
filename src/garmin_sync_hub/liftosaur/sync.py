@@ -424,6 +424,7 @@ def sync(
     since: str | None = None,
     fetch_all: bool = False,
     dry_run: bool = False,
+    skip_ids: set[str] | None = None,
     **overrides: Any,
 ) -> dict:
     """Sync Liftosaur workouts to Garmin Connect.
@@ -434,6 +435,7 @@ def sync(
         since: ISO date — sync workouts after this date.
         fetch_all: Sync the entire workout history.
         dry_run: Generate FIT files but don't upload.
+        skip_ids: Workouts to leave for later (failures waiting for their retry).
         **overrides: Override config values (liftosaur_api_key, garmin_email, garmin_password).
 
     Returns:
@@ -468,6 +470,11 @@ def sync(
         wid = workout.get("id", "unknown")
         title = workout.get("title", "Workout")
         start_time = workout.get("start_time") or workout.get("startTime", "")
+
+        if skip_ids and wid in skip_ids:
+            logger.debug("Skipping %s (%s) — failed, retry not due", wid, title)
+            stats["skipped"] += 1
+            continue
 
         if skip_existing and db.is_synced(wid):
             logger.debug("Skipping %s (%s) — already synced", wid, title)

@@ -21,7 +21,7 @@
         </div>
         <div class="source-meta">
             {% if lift.failed %}<a href="/?feed=attention" class="state-failed">{{ lift.failed }} failed</a> · {% endif %}
-            {% if lift.auto_sync.enabled %}Auto-sync every {{ lift.auto_sync.interval_minutes }} min{% if lift.auto_sync.next_sync %} · next {{ lift.auto_sync.next_sync }}{% endif %}{% else %}Auto-sync off{% endif %}
+            {% if lift.auto_sync.enabled %}Auto-sync every {{ lift.auto_sync.interval_minutes|interval_label }}{% if lift.auto_sync.next_at %} · next <time data-local data-time datetime="{{ lift.auto_sync.next_at.isoformat() }}"></time>{% endif %}{% else %}Auto-sync off{% endif %}
         </div>
         <div class="source-actions">
             <button id="sync-now-btn" class="btn btn-primary btn-sm" onclick="syncNow()" {% if not garmin_connected %}title="Connect Garmin first"{% endif %}>Sync now</button>
@@ -48,7 +48,7 @@
         <div class="source-meta">
             {% if zwift.failed %}<a href="/?feed=attention" class="state-failed">{{ zwift.failed }} failed</a> · {% endif %}
             {% if zwift.busy %}<span class="state-pending">{{ zwift.busy }} in progress</span> · {% endif %}
-            Scan every {{ zwift.scan_interval_minutes }} min{% if zwift.next_scan %} · next <time data-local data-time datetime="{{ zwift.next_scan.isoformat() }}"></time>{% endif %}
+            {% if zwift.auto_scan %}Auto-sync every {{ zwift.scan_interval_minutes|interval_label }}{% if zwift.next_scan %} · next <time data-local data-time datetime="{{ zwift.next_scan.isoformat() }}"></time>{% endif %}{% else %}Auto-sync off{% endif %}
             · {{ 'automatic merge' if zwift.auto_merge else 'merge on demand' }}
             · Zwift account {{ 'connected' if zwift.zwift_connected else 'not connected' }}
         </div>

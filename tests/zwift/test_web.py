@@ -59,7 +59,9 @@ def test_merge_all_queues_waiting_pairs(client, monkeypatch):
     assert r.status_code == 303
     assert {row["status"] for row in m.store.all()} == {"queued"}
     assert done.wait(2)
-    assert 'http-equiv="refresh"' in c.get("/zwift").text
+    page = c.get("/zwift").text
+    assert 'http-equiv="refresh"' not in page  # rows refresh themselves instead
+    assert page.count('hx-trigger="every 3s"') == 2
 
 
 def test_preview_page(client):
@@ -178,7 +180,7 @@ def test_zwift_settings_are_saved_and_applied(own_cfg):
         "auto_scan": ["off"], "auto_merge": ["off", "on"], "scan_interval_minutes": "60",
         "scan_days": "14", "min_overlap": "0.6",
     }, follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/settings?zwift=saved#zwift"
+    assert r.status_code == 303 and r.headers["location"] == "/settings?saved=zwift#zwift"
     assert (m.cfg.auto_scan, m.cfg.auto_merge, m.cfg.scan_interval_minutes, m.cfg.scan_days) == (False, True, 60, 14)
     assert m.cfg.min_overlap == 0.6
     assert m.state["next_scan"] is None  # auto-sync is off
@@ -196,7 +198,7 @@ def test_zwift_settings_are_saved_and_applied(own_cfg):
 def test_bad_zwift_settings_change_nothing(own_cfg):
     c, m = own_cfg
     r = c.post("/zwift/settings", data={"scan_days": "0", "auto_merge": "on"}, follow_redirects=False)
-    assert r.status_code == 303 and "zwift_error=" in r.headers["location"]
+    assert r.status_code == 303 and "error=Zwift+settings+not+saved" in r.headers["location"]
     assert m.cfg.auto_merge is False and m.cfg.scan_days != 0
     assert "between 1 and 365" in c.get(r.headers["location"]).text
 
@@ -204,7 +206,7 @@ def test_bad_zwift_settings_change_nothing(own_cfg):
 def test_zwift_autosync_toggle(own_cfg):
     c, m = own_cfg
     page = c.get("/zwift")
-    assert 'id="zw-autosync"' in page.text and "toggle-track active" in page.text
+    assert 'id="zw-autosync-toggle"' in page.text and "toggle-track active" in page.text
     r = c.post("/zwift/autosync", data={"enabled": "false", "interval": "120"})
     assert r.status_code == 200 and "Off" in r.text
     assert m.cfg.auto_scan is False and m.cfg.scan_interval_minutes == 120
@@ -256,3 +258,40 @@ def test_restore_button_only_for_merged_pairs_with_backups(client, monkeypatch):
     monkeypatch.setattr(m.service, "restore", lambda tid: called.set())
     r = c.post("/zwift/pairs/1/restore", follow_redirects=False)
     assert r.status_code == 303 and called.wait(2)
+
+
+def test_pair_actions_update_the_row_in_place(client, monkeypatch):
+    c, m = client
+    m.store.upsert_detected(1, 2, "Run A", "Zwift A", "2026-11-20T12:00:00+00:00", 0.97)
+    monkeypatch.setattr(m.service, "simulate", lambda tid: None)
+    r = c.post("/zwift/pairs/1/simulate", headers={"HX-Request": "true"})
+    assert r.status_code == 200 and r.text.lstrip().startswith("<tr")
+    assert 'id="pair-1"' in r.text and 'hx-get="/zwift/pairs/1/row"' in r.text  # running: refreshes itself
+    m.store.set_status(1, "simulated", "ok")
+    row = c.get("/zwift/pairs/1/row").text
+    assert "hx-trigger" not in row.split(">")[0] and "Simulated, ready to merge" in row
+    assert 'datetime="2026-11-20T12:00:00+00:00"' in row  # shown in local time by the page
+    assert c.post("/zwift/pairs/1/ignore", follow_redirects=False).status_code == 303  # without HTMX
+
+
+def test_pairs_filter_by_status(client):
+    c, m = client
+    m.store.upsert_detected(1, 2, "Waiting run", "Z1", "2026-11-20T12:00:00+00:00", 0.97)
+    m.store.upsert_detected(3, 4, "Merged run", "Z2", "2026-11-19T12:00:00+00:00", 0.97)
+    m.store.set_status(3, "merged", "Merged", new_id=9)
+    page = c.get("/zwift?status=merged").text
+    assert "Merged run" in page and "Waiting run" not in page
+    assert 'href="/zwift?status=merged" class="active"' in page
+    assert "Waiting run" in c.get("/zwift?status=nonsense").text  # unknown filter: all
+    assert "No pair with this status" in c.get("/zwift?status=failed").text
+
+
+def test_failed_pair_shows_its_next_retry(client):
+    c, m = client
+    m.cfg.auto_merge = True
+    try:
+        m.store.upsert_detected(1, 2, "Run", "Z", "2026-11-20T12:00:00+00:00", 0.97)
+        m.store.mark_failed(1, "Import failed")
+        assert "Next try with auto-merge" in c.get("/zwift").text
+    finally:
+        m.cfg.auto_merge = False

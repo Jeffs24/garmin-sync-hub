@@ -41,3 +41,12 @@ jobs:
           print(garmin_sync_hub.__version__)
           "
           docker run --rm garmin-sync-hub:test --help
+      - name: Start the app and wait for /healthz
+        run: |
+          docker run -d --name hub -p 8127:8127 garmin-sync-hub:test
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8127/healthz; then exit 0; fi
+            sleep 2
+          done
+          docker logs hub
+          exit 1

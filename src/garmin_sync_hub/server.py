@@ -11,9 +11,10 @@ import secrets
 import threading
 import time
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -21,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from jinja2 import Environment, FileSystemLoader
 
-from garmin_sync_hub import activity, db
+from garmin_sync_hub import activity, db, templating
 from garmin_sync_hub.auth import (
     SESSION_COOKIE,
     auth_enabled,
@@ -65,6 +66,7 @@ def _workout_anchor(workout_id: Any) -> str:
 
 
 _jinja_env.filters["workout_anchor"] = _workout_anchor
+templating.register(_jinja_env)
 
 
 def _render(template_name: str, **ctx) -> HTMLResponse:
@@ -104,6 +106,28 @@ app.include_router(zwift_module.router)
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon_ico() -> FileResponse:
     return FileResponse(FAVICON_ICO_PATH, media_type="image/vnd.microsoft.icon")
+
+
+@app.get("/healthz", include_in_schema=False)
+async def healthz() -> JSONResponse:
+    """For Docker and monitoring: the app answers. Needs no sign-in, so it says little.
+
+    Always 200 while the app runs: a Garmin problem is reported, not treated as a crash
+    (restarting the container would not fix it).
+    """
+    from garmin_sync_hub import __version__
+
+    running = {t.name for t in threading.enumerate()}
+    return JSONResponse({
+        "status": "ok",
+        "version": __version__,
+        "garmin": _garmin_health()["state"],
+        "jobs": {
+            "zwift_scan": "zwift-scan" in running,
+            "garmin_check": "garmin-check" in running,
+            "liftosaur_autosync": _autosync_timer is not None,
+        },
+    })
 
 
 # ── Auto-sync state ─────────────────────────────────────────────────────────
@@ -209,7 +233,8 @@ def _run_autosync() -> None:
     logger.info("Auto-sync: running scheduled sync")
     liftosaur_auth_failed = False
     try:
-        result = sync(limit=10, dry_run=False)
+        # Failed workouts wait for their retry time (30 min, 2 h, 8 h, then a click).
+        result = sync(limit=10, dry_run=False, skip_ids=db.get_db().failures_on_hold())
     except Exception as e:
         from garmin_sync_hub.liftosaur.liftosaur import LiftosaurAuthError
 
@@ -241,6 +266,7 @@ def _schedule_autosync(interval_minutes: int) -> None:
         _autosync_timer = threading.Timer(interval_minutes * 60, _run_autosync)
         _autosync_timer.daemon = True
         _autosync_timer.start()
+        _autosync_next[0] = datetime.now(timezone.utc) + timedelta(minutes=interval_minutes)
 
 
 def _stop_autosync() -> None:
@@ -250,6 +276,10 @@ def _stop_autosync() -> None:
         if _autosync_timer is not None:
             _autosync_timer.cancel()
             _autosync_timer = None
+        _autosync_next[0] = None
+
+
+_autosync_next: list[datetime | None] = [None]  # when the pending timer fires
 
 
 def _parse_autosync_interval(raw: Any, default: int = 120) -> int:
@@ -281,6 +311,31 @@ def _record_failure(workout_id: str, title: str, error: str) -> None:
         logger.debug("Could not record the failure of %s", workout_id)
 
 
+def htmx_notice(message: str, kind: str = "error") -> HTMLResponse:
+    """HTMX reply that shows a floating notice (see notify() in base.html) and changes nothing else."""
+    return HTMLResponse("", headers={
+        "HX-Trigger": json.dumps({"notify": {"message": message, "kind": kind}}),
+        "HX-Reswap": "none",
+    })
+
+
+def _with_notice(request: Request, key: str, anchor: str = "") -> str:
+    """The page the HTMX request came from, with ?saved=<key> (a notice in base.html)."""
+    from urllib.parse import parse_qsl, urlsplit
+
+    current = urlsplit(request.headers.get("HX-Current-URL") or "/")
+    query = [(k, v) for k, v in parse_qsl(current.query) if k not in ("saved", "error")]
+    query.append(("saved", key))
+    return f"{current.path or '/'}?{urlencode(query)}" + (f"#{anchor}" if anchor else "")
+
+
+def liftosaur_autosync_line(status: dict[str, Any]) -> str:
+    """The line under the Liftosaur auto-sync switch (same macro as Zwift)."""
+    return templating.render_autosync_line(
+        _jinja_env, status["enabled"], status.get("last_at"), status.get("next_at"),
+        "workouts sync only when you click “Sync now”.")
+
+
 def _get_autosync_status() -> dict[str, Any]:
     """Build auto-sync status dict for templates."""
     config = load_config()
@@ -288,34 +343,13 @@ def _get_autosync_status() -> dict[str, Any]:
     enabled = auto_cfg.get("enabled", False)
     interval = auto_cfg.get("interval_minutes", 30)
 
-    status: dict[str, Any] = {
+    # Times are shown in the viewer's time zone by the templates.
+    return {
         "enabled": enabled,
         "interval_minutes": interval,
-        "last_sync": None,
-        "next_sync": None,
+        "last_at": _last_sync_time,
+        "next_at": _autosync_next[0] if enabled else None,
     }
-
-    if _last_sync_time:
-        elapsed = datetime.now(timezone.utc) - _last_sync_time
-        minutes_ago = int(elapsed.total_seconds() / 60)
-        if minutes_ago < 1:
-            status["last_sync"] = "just now"
-        elif minutes_ago < 60:
-            status["last_sync"] = f"{minutes_ago} min ago"
-        else:
-            hours_ago = minutes_ago // 60
-            status["last_sync"] = f"{hours_ago}h {minutes_ago % 60}m ago"
-
-        if enabled:
-            remaining = interval - minutes_ago
-            if remaining <= 0:
-                status["next_sync"] = "soon"
-            elif remaining < 60:
-                status["next_sync"] = f"in {remaining} min"
-            else:
-                status["next_sync"] = f"in {remaining // 60}h {remaining % 60}m"
-
-    return status
 
 
 GARMIN_CHECK_MINUTES = 30
@@ -382,7 +416,7 @@ async def check_setup(request: Request, call_next):
     global _is_configured_cache
     _current_request.set(request)
     path = request.url.path
-    if path == "/favicon.ico" or path.startswith("/static"):
+    if path in ("/favicon.ico", "/healthz") or path.startswith("/static"):
         return await call_next(request)
 
     if auth_enabled() and path not in _AUTH_EXEMPT_PATHS:
@@ -466,20 +500,32 @@ def _liftosaur_summary(config: dict) -> dict[str, Any]:
         except Exception:
             pass
     sync_log = db.get_sync_log(1)
+    auto_sync = _get_autosync_status()
     return {
         "configured": configured,
         "synced": synced,
         "total": total,
         "pending": max(0, total - synced),
         "failed": len(db.get_db().get_failures()),
-        "auto_sync": _get_autosync_status(),
+        "auto_sync": auto_sync,
+        "autosync_line": liftosaur_autosync_line(auto_sync),
+        "autosync_intervals": _VALID_AUTOSYNC_INTERVALS,
         "last_run": sync_log[0] if sync_log else None,
     }
 
 
 def _activity_feed() -> list:
     _db = db.get_db()
-    return activity.build_feed(_db.get_all_synced(), _db.get_failures(), zwift_module.store.all())
+    events = activity.build_feed(_db.get_all_synced(), _db.get_failures(), zwift_module.store.all())
+    # A retry time only means something while the automation that retries is on.
+    retrying = {
+        "liftosaur": bool(load_config().get("auto_sync", {}).get("enabled")),
+        "zwift": zwift_module.cfg.auto_merge and zwift_module.cfg.auto_scan,
+    }
+    for e in events:
+        if e.retry_at and not retrying.get(e.source):
+            e.retry_at = None
+    return events
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -711,6 +757,7 @@ async def workouts_page(request: Request):
         }
         # Check for workouts edited in Liftosaur since last sync
         stale_ids = set(_db.get_stale_synced(workouts_raw))
+        sync_actions = _db.get_sync_actions(workout_ids)
 
         # Get profile for calorie calculation
         profile = config.get("user_profile", {})
@@ -723,6 +770,7 @@ async def workouts_page(request: Request):
             w["end_time"] = w.get("end_time") or w.get("endTime", "")
             if w["id"] in synced_map:
                 w["status"] = "uploaded"
+                w["sync_action"] = sync_actions.get(w["id"])
                 gid = synced_map[w["id"]]
                 if gid:
                     w["garmin_match"] = {"garmin_id": gid, "garmin_name": w.get("title", "")}
@@ -924,7 +972,7 @@ async def workout_page(workout_id: str):
         logger.warning("Could not locate workout %s: %s", workout_id, e)
         page = None
     if page is None:
-        return RedirectResponse("/liftosaur/workouts?missing=1", status_code=303)
+        return RedirectResponse("/liftosaur/workouts?" + urlencode({"error": "That workout is no longer in your recent Liftosaur history."}), status_code=303)
     return RedirectResponse(f"/liftosaur/workouts?page={page}#{_workout_anchor(workout_id)}", status_code=303)
 
 
@@ -975,8 +1023,6 @@ async def settings_page(request: Request):
         "settings.html",
         config=config,
         zwift_cfg=zwift_module.cfg,
-        zwift_saved=request.query_params.get("zwift") == "saved",
-        zwift_error=request.query_params.get("zwift_error"),
         unmapped=sorted(unmapped.items(), key=lambda x: -x[1]),
         garmin_connected=_has_garmin_tokens(config),
         is_cloud=False,
@@ -1012,7 +1058,7 @@ async def settings_save(
     ue["match_window_minutes"] = max(1, min(1440, match_window_minutes))
     save_config(config)
 
-    return RedirectResponse("/settings", status_code=303)
+    return RedirectResponse("/settings?saved=settings", status_code=303)
 
 
 # ── API (HTMX) ──────────────────────────────────────────────────────────────
@@ -1205,7 +1251,7 @@ async def api_sync_single(request: Request, workout_id: str):
                 break
             page += 1
         if not workout:
-            return HTMLResponse('<td colspan="5">Workout not found</td>')
+            return htmx_notice("Workout not found in Liftosaur.")
 
         garmin_client = get_client(config.get("garmin_email"))
         workout_start = workout.get("start_time")
@@ -1231,11 +1277,11 @@ async def api_sync_single(request: Request, workout_id: str):
                 set_description(garmin_client, aid, generate_description(workout, calories=result.get("calories"), avg_hr=result.get("avg_hr")))
             db.mark_synced(workout_id=workout_id, garmin_activity_id=str(aid) if aid else None, title=workout["title"], calories=result.get("calories"), avg_hr=result.get("avg_hr"), source_updated_at=workout.get("updated_at"), action="updated" if existing_id else "uploaded")
 
-        start = (workout.get("start_time") or "")[:16]
-        return HTMLResponse(f'<tr><td><span class="badge badge-success">✓ Synced</span></td><td>{start}</td><td><strong>{workout["title"]}</strong></td><td>{len(workout.get("exercises", []))}</td><td></td></tr>')
+        # Reload the page so the card shows its new status, with a notice.
+        return HTMLResponse("", headers={"HX-Redirect": _with_notice(request, "workout", _workout_anchor(workout_id))})
     except Exception as e:
         _record_failure(workout_id, (locals().get("workout") or {}).get("title", ""), str(e))
-        return HTMLResponse(f'<td colspan="5" style="color: var(--pico-del-color);">Failed: {e}</td>')
+        return htmx_notice(f"Upload failed: {e}")
 
 
 @app.post("/api/unsync/{workout_id}")
@@ -1270,6 +1316,40 @@ async def api_unsync(request: Request, workout_id: str):
 
     logger.info("Unsynced workout %s (garmin_id=%s, garmin_deleted=%s)", workout_id, garmin_id, garmin_deleted)
     return JSONResponse({"ok": True, "garmin_deleted": garmin_deleted})
+
+
+@app.post("/api/workouts/{workout_id}/undo")
+async def api_undo_workout(request: Request, workout_id: str):
+    """Undo an upload: delete the Garmin activity this app created, then mark the workout pending.
+
+    Only for workouts uploaded as a new activity. A watch activity that was updated is never deleted.
+    """
+    sync_actions = db.get_db().get_sync_actions([workout_id])
+    if workout_id not in sync_actions:
+        return htmx_notice("This workout is not synced.")
+    if sync_actions[workout_id] != "uploaded":
+        return htmx_notice("Only a workout uploaded as a new Garmin activity can be undone.")
+    garmin_id = db.get_garmin_id(workout_id)
+    if garmin_id:
+        try:
+            from garmin_sync_hub.garmin import get_client
+
+            client = get_client(load_config().get("garmin_email"))
+            await run_in_threadpool(client.delete_activity, int(garmin_id))
+        except Exception as e:  # noqa: BLE001 - keep the record: nothing was undone
+            logger.warning("Undo of %s: could not delete Garmin activity %s: %s", workout_id, garmin_id, e)
+            return htmx_notice(f"Garmin did not delete the activity: {e}")
+    db.unsync(workout_id)
+    _clear_workout_pages()
+    logger.info("Undid workout %s (deleted Garmin activity %s)", workout_id, garmin_id)
+    return HTMLResponse("", headers={"HX-Redirect": _with_notice(request, "undone", _workout_anchor(workout_id))})
+
+
+def _clear_workout_pages() -> None:
+    """Forget cached workout pages so the list shows the new sync state."""
+    _db = db.get_db()
+    for page in range(1, 11):
+        _db.set_app_config(f"workouts_page_{page}", {})
 
 
 @app.post("/api/unsync-all")
@@ -1313,8 +1393,7 @@ async def api_toggle_autosync(request: Request):
         _stop_autosync()
         logger.info("Auto-sync disabled")
 
-    auto_sync = _get_autosync_status()
-    return _render("partials/autosync_status.html", auto_sync=auto_sync)
+    return HTMLResponse(liftosaur_autosync_line(_get_autosync_status()))
 
 
 @app.post("/api/sync-one")

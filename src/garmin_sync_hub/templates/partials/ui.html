@@ -17,16 +17,70 @@
 {{ subtabs([("/zwift", "Pairs"), ("/zwift/account", "Account and files")], current) }}
 {%- endmacro %}
 
-{# Feed filters: links to base_url?param=key #}
-{% macro feed_tabs(base_url, param, current, counts) -%}
-{% set labels = {"all": "All", "liftosaur": "Liftosaur", "zwift": "Zwift", "attention": "Needs attention"} %}
-<nav class="tabs" aria-label="Filter activity">
+{# Filter tabs: links to base_url?param=key, with a count each. `alert` keys turn red when not empty. #}
+{% macro filter_tabs(base_url, param, current, labels, counts, alert=(), aria_label="Filter") -%}
+<nav class="tabs" aria-label="{{ aria_label }}">
     {% for key, label in labels.items() %}
     <a href="{{ base_url }}{% if key != 'all' %}?{{ param }}={{ key }}{% endif %}" {% if key == current %}class="active" aria-current="true"{% endif %}>
-        {{ label }}<span class="count {% if key == 'attention' and counts.get(key) %}alert{% endif %}">{{ counts.get(key, 0) }}</span>
+        {{ label }}<span class="count {% if key in alert and counts.get(key) %}alert{% endif %}">{{ counts.get(key, 0) }}</span>
     </a>
     {% endfor %}
 </nav>
+{%- endmacro %}
+
+{% macro feed_tabs(base_url, param, current, counts) -%}
+{{ filter_tabs(base_url, param, current, {"all": "All", "liftosaur": "Liftosaur", "zwift": "Zwift", "attention": "Needs attention"}, counts, alert=("attention",), aria_label="Filter activity") }}
+{%- endmacro %}
+
+{# A UTC datetime shown in the viewer's time zone. #}
+{% macro local_time(value) -%}
+<time data-local data-time datetime="{{ value.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ value.strftime('%Y-%m-%d %H:%M') }} UTC</time>
+{%- endmacro %}
+
+{# Status pill, same colors everywhere. state: ok | pending (waits for you) | warning | failed | muted #}
+{% macro status_badge(state, label) -%}
+<span class="badge {{ {'ok': 'badge-success', 'pending': 'badge-warning', 'warning': 'badge-warning', 'failed': 'badge-error'}.get(state, 'badge-pending') }}">{{ caller() if caller else '' }}{{ label }}</span>
+{%- endmacro %}
+
+{# Auto-sync switch and interval picker. Both post {enabled, interval} to `endpoint`; the reply replaces the status line. #}
+{% macro autosync_control(prefix, endpoint, enabled, interval, intervals, label, hint, status) -%}
+{% set vals = 'js:{"enabled": document.getElementById("' ~ prefix ~ '-toggle").classList.contains("active"), "interval": document.getElementById("' ~ prefix ~ '-interval").value}' %}
+<div class="autosync-row">
+    <div class="autosync-side">
+        <div id="{{ prefix }}-toggle" class="toggle-track {% if enabled %}active{% endif %}"
+             hx-post="{{ endpoint }}" hx-target="#{{ prefix }}-status" hx-swap="innerHTML"
+             hx-vals='{{ vals }}' hx-disabled-elt="this, #{{ prefix }}-interval" hx-trigger="click, keyup[key==' '||key=='Enter']"
+             onclick="this.classList.toggle('active'); this.setAttribute('aria-checked', this.classList.contains('active'))"
+             onkeyup="if (event.key === ' ' || event.key === 'Enter') { this.classList.toggle('active'); this.setAttribute('aria-checked', this.classList.contains('active')); }"
+             role="switch" tabindex="0" aria-checked="{{ 'true' if enabled else 'false' }}" aria-label="{{ label }}">
+            <div class="toggle-thumb"></div>
+        </div>
+        <span class="autosync-label">{{ label }}{% if hint %} <span class="autosync-hint">({{ hint }})</span>{% endif %}</span>
+    </div>
+    <div class="autosync-side" style="gap: 6px;">
+        <label for="{{ prefix }}-interval" class="autosync-hint" style="font-size: 12px;">Every</label>
+        <select id="{{ prefix }}-interval" class="interval-select"
+                hx-post="{{ endpoint }}" hx-target="#{{ prefix }}-status" hx-swap="innerHTML"
+                hx-vals='{{ vals }}' hx-disabled-elt="this, #{{ prefix }}-toggle" hx-trigger="change">
+            {% for minutes in intervals %}
+            <option value="{{ minutes }}" {{ 'selected' if interval == minutes }}>{{ minutes|interval_label }}</option>
+            {% endfor %}
+            {% if interval not in intervals %}<option value="{{ interval }}" selected>{{ interval|interval_label }}</option>{% endif %}
+        </select>
+    </div>
+</div>
+<div id="{{ prefix }}-status" class="autosync-status">{{ status }}</div>
+{%- endmacro %}
+
+{# The line under an auto-sync switch. last/next are aware datetimes or None. #}
+{% macro autosync_line(enabled, last, next, manual_hint) -%}
+{% if not enabled %}Off: {{ manual_hint }}
+{%- else %}
+{%- if last %}Last: <time data-local data-time datetime="{{ last.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ last.strftime('%Y-%m-%d %H:%M') }} UTC</time>{% endif %}
+{%- if last and next %} · {% endif %}
+{%- if next %}Next: <time data-local data-time datetime="{{ next.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ next.strftime('%Y-%m-%d %H:%M') }} UTC</time>{% endif %}
+{%- if not last and not next %}On.{% endif %}
+{%- endif %}
 {%- endmacro %}
 
 {% macro feed_table(events, empty_message) -%}
@@ -45,7 +99,8 @@
             {% if e.detail %}<div class="detail">{{ e.detail }}</div>{% endif %}
         </td>
         <td>
-            <span class="state-{{ e.state }}" style="font-weight: 600; font-size: 13px;">{{ e.result }}</span>
+            {{ status_badge(e.state, e.result) }}
+            {% if e.retry_at %}<div class="detail">Next try with {{ e.retry_by }}: {{ local_time(e.retry_at) }}</div>{% endif %}
             {% if e.garmin_url %}<div class="detail"><a href="{{ e.garmin_url }}" target="_blank" rel="noopener">View on Garmin &nearr;</a></div>{% endif %}
         </td>
     </tr>

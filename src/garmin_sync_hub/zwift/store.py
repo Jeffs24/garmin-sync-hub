@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .. import retry
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS pairs (
     target_id    INTEGER PRIMARY KEY,   -- watch activity (original id)
@@ -20,7 +22,9 @@ CREATE TABLE IF NOT EXISTS pairs (
     new_id       INTEGER,               -- merged activity id on Garmin
     position_ratio REAL,
     source_file  TEXT,                  -- uploaded Zwift FIT (source_id = 0)
-    updated_at   TEXT NOT NULL
+    updated_at   TEXT NOT NULL,
+    attempts     INTEGER NOT NULL DEFAULT 0,  -- failed merges in a row
+    retry_at     TEXT                   -- next automatic retry (auto-merge), UTC
 );
 CREATE TABLE IF NOT EXISTS zwift_seen (
     zwift_id     TEXT PRIMARY KEY,
@@ -45,6 +49,11 @@ class Store:
         self._lock = threading.Lock()
         with self._lock:
             self._db.executescript(SCHEMA)
+            columns = {r["name"] for r in self._db.execute("PRAGMA table_info(pairs)")}
+            if "attempts" not in columns:  # databases from before 0.4.0
+                self._db.execute("ALTER TABLE pairs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+                self._db.execute("ALTER TABLE pairs ADD COLUMN retry_at TEXT")
+                self._db.commit()
 
     def upsert_detected(self, target_id: int, source_id: int, target_name: str, source_name: str,
                         start_utc: str, overlap: float, source_file: str | None = None) -> bool:
@@ -84,12 +93,34 @@ class Store:
     def set_status(self, target_id: int, status: str, message: str | None = None,
                    new_id: int | None = None, position_ratio: float | None = None) -> None:
         with self._lock, self._db:
+            # A pair that is merged, ignored or found again starts over with no failures.
             self._db.execute(
                 """UPDATE pairs SET status=?, message=?,
                      new_id=COALESCE(?, new_id), position_ratio=COALESCE(?, position_ratio),
+                     attempts=CASE WHEN ? IN ('running', 'queued', 'failed') THEN attempts ELSE 0 END,
+                     retry_at=CASE WHEN ? IN ('running', 'queued', 'failed') THEN retry_at ELSE NULL END,
                      updated_at=? WHERE target_id=?""",
-                (status, message, new_id, position_ratio, _now(), target_id),
+                (status, message, new_id, position_ratio, status, status, _now(), target_id),
             )
+
+    def mark_failed(self, target_id: int, message: str) -> None:
+        """Record a failed merge and when auto-merge may try it again."""
+        with self._lock, self._db:
+            row = self._db.execute("SELECT attempts FROM pairs WHERE target_id=?", (target_id,)).fetchone()
+            attempts = (row["attempts"] if row else 0) + 1
+            self._db.execute(
+                "UPDATE pairs SET status='failed', message=?, attempts=?, retry_at=?, updated_at=? WHERE target_id=?",
+                (message, attempts, retry.to_text(retry.next_retry(attempts)), _now(), target_id),
+            )
+
+    def due_retries(self, now: datetime | None = None) -> list[int]:
+        """Failed pairs whose automatic retry is due."""
+        now = now or datetime.now(timezone.utc)
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT target_id, retry_at FROM pairs WHERE status='failed' AND retry_at IS NOT NULL"
+            ).fetchall()
+        return [r["target_id"] for r in rows if retry.parse(r["retry_at"]) <= now]
 
     def get(self, target_id: int) -> dict[str, Any] | None:
         with self._lock:

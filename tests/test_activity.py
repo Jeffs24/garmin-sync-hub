@@ -74,5 +74,5 @@ def test_workout_link_opens_the_right_page(monkeypatch):
         page = c.get("/liftosaur/workouts?page=2").text
         assert 'id="workout-w2"' in page
         r = c.get("/liftosaur/workouts/gone", follow_redirects=False)
-        assert r.headers["location"] == "/liftosaur/workouts?missing=1"
+        assert r.headers["location"] == "/liftosaur/workouts?error=That+workout+is+no+longer+in+your+recent+Liftosaur+history."
         assert "no longer in your recent Liftosaur history" in c.get(r.headers["location"]).text

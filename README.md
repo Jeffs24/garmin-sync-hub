@@ -33,6 +33,12 @@ Set `HUB_PASSWORD` in `.env` to protect the web UI with a password if it can be 
 
 **Liftosaur → Workouts** lists your Liftosaur workouts; sync them one by one or all at once (**Sync now**, also on the Overview). Auto-sync runs on a schedule you choose on the same page.
 
+A synced workout has three actions:
+
+- **Undo** (workouts uploaded as a new activity only): deletes the Garmin activity this app created and makes the workout pending again. A watch activity that was updated with your sets is never deleted.
+- **Re-sync** (after an edit in Liftosaur): uploads the workout again. An uploaded activity is replaced; an updated watch activity gets its sets written again.
+- **Unsync**: forgets the sync without touching Garmin.
+
 - **Mappings**: Liftosaur exercises are mapped to Garmin's exercise categories. Unmapped exercises show as "Unknown" on Garmin; map them from **Liftosaur → Mappings**.
 - **Heart rate**: when your watch recorded the session, its heart rate is merged into the uploaded workout.
 - **Update existing activities**: if your watch already recorded the strength session, the workout's exercises and sets are written into that activity instead of creating a new one.
@@ -52,7 +58,7 @@ For each pair of *watch activity without a map* + *Zwift activity with a map* th
 
 Every Garmin step is checked against the activity list, since Garmin sometimes answers with an error (such as a 504) for a request that went through. If an earlier attempt left the watch activity deleted without a replacement, clicking **Merge** again imports it from the backups.
 
-**Zwift → Pairs** lists the pairs found. Its **Auto-sync** switch turns the scheduled scan on or off and sets how often it runs; the other Zwift options (merge mode, period scanned, matching thresholds) are in **Settings → Zwift** and apply right away. **Simulate** builds the merged file without touching Garmin, and **Preview** shows it as Garmin will get it: map, stats and charts. **Restore** undoes a merge from the backups: the original watch activity is re-imported first (name, description, type and gear restored), then the merged activity is deleted, and a Zwift copy removed by the merge is brought back. The restored pair stays out of automatic merges. A **How it works** card on the same page shows what the merge takes from each activity, with your current settings.
+**Zwift → Pairs** lists the pairs found, with a filter by status. Actions update the row in place, and a pair being merged refreshes itself until it is done. Its **Auto-sync** switch turns the scheduled scan on or off and sets how often it runs; the other Zwift options (merge mode, period scanned, matching thresholds) are in **Settings → Zwift** and apply right away. **Simulate** builds the merged file without touching Garmin, and **Preview** shows it as Garmin will get it: map, stats and charts. **Restore** undoes a merge from the backups: the original watch activity is re-imported first (name, description, type and gear restored), then the merged activity is deleted, and a Zwift copy removed by the merge is brought back. The restored pair stays out of automatic merges. A **How it works** card on the same page shows what the merge takes from each activity, with your current settings.
 
 ### Zwift account and history
 
@@ -100,6 +106,9 @@ Everything lives in the `data/` volume (`DATA_DIR`):
 | `zwift_backups/` | original and merged FIT files |
 
 ## Good to know
+
+- **Automatic retries**: with auto-sync on (Liftosaur) or auto-merge and auto-sync on (Zwift), a failed workout or merge is tried again after 30 minutes, then 2 hours, then 8 hours. After that it waits for a click. The Activity page shows when the next try is due.
+- **Health check**: `GET /healthz` answers without sign-in (`{"status": "ok", "version": ..., "garmin": ...}`) and is used by the Docker `HEALTHCHECK`. A Garmin problem is reported there but does not mark the container unhealthy.
 
 - The tool uses the unofficial Garmin Connect API (through [python-garminconnect](https://github.com/cyberjunky/python-garminconnect)) and the unofficial Zwift Companion API. Both can change without notice.
 - A merged Zwift activity gets a new Garmin ID: links to the old one stop working.

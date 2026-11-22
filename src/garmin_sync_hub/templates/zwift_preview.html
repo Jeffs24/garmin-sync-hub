@@ -18,7 +18,7 @@
 <p><a href="/zwift">← Back</a></p>
 <div class="page-header">
     <h1>{{ row.target_name or 'Activity' }}</h1>
-    <p>{{ pv.sport }}{% if pv.start %} · {{ pv.start.strftime('%Y-%m-%d %H:%M') }} UTC{% endif %} · map from {{ row.source_name or 'Zwift' }}</p>
+    <p>{{ pv.sport }}{% if pv.start %} · <time data-local data-time datetime="{{ pv.start.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ pv.start.strftime('%Y-%m-%d %H:%M') }} UTC</time>{% endif %} · map from {{ row.source_name or 'Zwift' }}</p>
 </div>
 
 {% if not has_file %}

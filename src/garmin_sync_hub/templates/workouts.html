@@ -95,9 +95,6 @@
     <p style="font-size: 13px; color: var(--text-secondary); margin-top: 6px;">{{ fetch_error }}. Check your Liftosaur API key in <a href="/settings#liftosaur">Settings</a>.</p>
 </div>
 {% endif %}
-{% if request and request.query_params.get('missing') %}
-<div class="toast toast-error" style="margin-bottom: 16px;">That workout is no longer in your recent Liftosaur history.</div>
-{% endif %}
 <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start;">
     <div>
         <h2 style="font-size: 18px; font-weight: 700;">Workouts</h2>
@@ -136,54 +133,49 @@
         <div style="flex: 1;">
             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
                 <span style="font-weight: 700; font-size: 16px;">{{ w.title }}</span>
+                {% set check %}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>{% endset %}
                 {% if w.status == 'uploaded' %}
-                <span class="badge badge-success">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                    Uploaded
-                </span>
+                {% call ui.status_badge('ok', {'uploaded': 'Uploaded', 'updated': 'Watch activity updated'}.get(w.sync_action, 'Synced')) %}{{ check }}{% endcall %}
                 {% if w.edited_since_sync %}
-                <span class="badge" style="background: rgba(251,191,36,0.15); color: #fbbf24; border-color: rgba(251,191,36,0.3);">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                    Edited on Liftosaur
-                </span>
+                {% call ui.status_badge('warning', 'Edited on Liftosaur') %}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>{% endcall %}
                 {% endif %}
                 {% elif w.status == 'matched' %}
-                <span class="badge badge-success">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                    On Garmin{% if w.garmin_match and w.garmin_match.garmin_name %} as "{{ w.garmin_match.garmin_name }}"{% endif %}
-                </span>
+                {% call ui.status_badge('ok', 'On Garmin' ~ ((' as "' ~ w.garmin_match.garmin_name ~ '"') if w.garmin_match and w.garmin_match.garmin_name else '')) %}{{ check }}{% endcall %}
                 {% else %}
-                <span class="badge badge-pending">Not on Garmin</span>
+                {{ ui.status_badge('pending', 'Not on Garmin') }}
                 {% endif %}
             </div>
             <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 10px;">
                 {{ w.start_time[:10] }} at {{ w.start_time[11:16] }}
                 &middot; {{ w.exercises|length }} exercises
             </div>
-            <!-- Garmin link -->
-            <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+            <!-- Garmin link and actions -->
+            <div style="display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;">
                 {% if w.garmin_match and w.garmin_match.garmin_id %}
-                <a href="https://connect.garmin.com/modern/activity/{{ w.garmin_match.garmin_id }}" target="_blank" rel="noopener"
-                   style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgba(0,135,90,0.12); color: #34d399; text-decoration: none;">
+                <a class="chip chip-ok" href="https://connect.garmin.com/modern/activity/{{ w.garmin_match.garmin_id }}" target="_blank" rel="noopener">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
                     Garmin
                 </a>
                 {% endif %}
                 {% if w.status == 'uploaded' and w.edited_since_sync %}
-                <button type="button"
-                    onclick="resyncWorkout('{{ w.id }}', this)"
-                    style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgba(251,191,36,0.12); color: #fbbf24; border: none; cursor: pointer;"
-                    title="Unsync and re-upload with the latest Liftosaur data">
+                <button type="button" class="chip chip-warn" onclick="resyncWorkout('{{ w.id }}', this, {{ 'false' if w.sync_action == 'updated' else 'true' }})"
+                    title="Delete the Garmin activity and upload it again with the latest Liftosaur data">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                     Re-sync
                 </button>
                 {% endif %}
+                {% if w.status == 'uploaded' and w.sync_action == 'uploaded' %}
+                <button type="button" class="chip chip-fail" hx-post="/api/workouts/{{ w.id }}/undo" hx-disabled-elt="this"
+                    hx-confirm="Undo this upload? The Garmin activity created for this workout is deleted and the workout becomes pending again."
+                    title="Delete the Garmin activity this app created">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
+                    Undo
+                </button>
+                {% endif %}
                 {% if w.status == 'uploaded' %}
-                <button type="button"
-                    onclick="unsyncWorkout('{{ w.id }}', this)"
-                    style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgba(239,68,68,0.12); color: #f87171; border: none; cursor: pointer;"
-                    title="Remove sync record so this workout can be re-synced">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                <button type="button" class="chip" onclick="unsyncWorkout('{{ w.id }}', this)"
+                    title="Forget the sync so this workout can be synced again. Garmin is not changed.">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg>
                     Unsync
                 </button>
                 {% endif %}
@@ -484,48 +476,62 @@ async function loadHRChart(workoutId, summaryEl) {
     }
 }
 
-async function resyncWorkout(workoutId, btn) {
-    if (!confirm('Re-sync this workout? The old Garmin activity will be deleted and a fresh one uploaded with the latest Liftosaur data.')) return;
+// Reload this page with a notice (keys in base.html) and scroll back to the workout.
+function reloadWith(notice, workoutId) {
+    const url = new URL(location.href);
+    url.searchParams.set('saved', notice);
+    url.hash = 'workout-' + String(workoutId).replace(/[^A-Za-z0-9_-]/g, '-');
+    location.href = url.toString();
+}
+
+// deleteOld: the Garmin activity was created by this app (safe to delete). Otherwise it is the
+// watch activity: keep it and update its sets again instead.
+async function resyncWorkout(workoutId, btn, deleteOld) {
+    const question = deleteOld
+        ? 'Re-sync this workout? The Garmin activity created for it is deleted and a fresh one uploaded with the latest Liftosaur data.'
+        : 'Re-sync this workout? The sets of the watch activity on Garmin are updated with the latest Liftosaur data.';
+    if (!confirm(question)) return;
     btn.disabled = true;
     btn.textContent = 'Re-syncing…';
     try {
-        // Step 1: unsync + delete old Garmin activity
         const form = new FormData();
-        form.append('delete_garmin', 'true');
+        if (deleteOld) form.append('delete_garmin', 'true');
         const unsyncResp = await fetch('/api/unsync/' + workoutId, { method: 'POST', body: form });
         const unsyncData = await unsyncResp.json();
-        if (!unsyncData.ok) { alert('Unsync failed: ' + (unsyncData.error || 'Unknown')); btn.disabled = false; btn.textContent = 'Re-sync'; return; }
-        // Step 2: re-sync with force=1 (bypass dedup check)
-        const syncResp = await fetch('/api/sync/' + workoutId + '?force=1', { method: 'POST' });
-        if (syncResp.ok) { window.location.reload(); }
-        else { alert('Re-sync upload failed. The workout is now pending — try syncing from the dashboard.'); window.location.reload(); }
+        if (!unsyncData.ok) { notify('Re-sync failed: ' + (unsyncData.error || 'unknown error'), 'error'); btn.disabled = false; btn.textContent = 'Re-sync'; return; }
+        const syncResp = await fetch('/api/sync/' + workoutId + (deleteOld ? '?force=1' : ''), { method: 'POST', headers: { 'HX-Request': 'true' } });
+        if (syncResp.headers.get('HX-Redirect')) { reloadWith('workout', workoutId); return; }
+        let message = 'Re-sync upload failed. The workout is pending: sync it again from this page.';
+        try { message = JSON.parse(syncResp.headers.get('HX-Trigger')).notify.message; } catch (_) {}
+        sessionStorage.setItem('pendingNotice', message);
+        location.reload();
     } catch (e) {
-        alert('Network error: ' + e.message);
+        notify('Network error: ' + e.message, 'error');
         btn.disabled = false;
         btn.textContent = 'Re-sync';
     }
 }
 
 async function unsyncWorkout(workoutId, btn) {
-    if (!confirm('Remove this sync record? The workout will re-appear as "pending" and can be synced again.\n\nThe Garmin activity won\'t be deleted — manage that from Garmin Connect if needed.')) return;
+    if (!confirm('Forget this sync? The workout shows as pending and can be synced again.\n\nGarmin is not changed: use Undo, or Garmin Connect, to delete the activity.')) return;
     btn.disabled = true;
-    btn.textContent = 'Removing…';
     try {
-        const form = new FormData();
-        const resp = await fetch('/api/unsync/' + workoutId, { method: 'POST', body: form });
+        const resp = await fetch('/api/unsync/' + workoutId, { method: 'POST', body: new FormData() });
         const data = await resp.json();
-        if (data.ok) {
-            window.location.reload();
-        } else {
-            alert('Failed: ' + (data.error || 'Unknown error'));
-            btn.disabled = false;
-            btn.textContent = 'Unsync';
-        }
+        if (data.ok) { reloadWith('unsynced', workoutId); return; }
+        notify('Unsync failed: ' + (data.error || 'unknown error'), 'error');
     } catch (e) {
-        alert('Network error: ' + e.message);
-        btn.disabled = false;
-        btn.textContent = 'Unsync';
+        notify('Network error: ' + e.message, 'error');
     }
+    btn.disabled = false;
 }
+
+// A notice saved before a reload (failed re-sync).
+(function () {
+    try {
+        const message = sessionStorage.getItem('pendingNotice');
+        if (message) { sessionStorage.removeItem('pendingNotice'); notify(message, 'error'); }
+    } catch (_) {}
+})();
 </script>
 {% endblock %}

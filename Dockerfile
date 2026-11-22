@@ -25,7 +25,7 @@ VOLUME ["/data"]
 EXPOSE 8127
 
 HEALTHCHECK --interval=60s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8127/favicon.ico', timeout=4)" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8127/healthz', timeout=4)" || exit 1
 
 ENTRYPOINT ["garmin-sync-hub"]
 CMD ["serve", "--host", "0.0.0.0", "--port", "8127"]

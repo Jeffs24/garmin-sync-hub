@@ -1,8 +1,5 @@
+{% import "partials/ui.html" as ui %}
 {# Liftosaur sync controls: counts, Sync now, auto-sync. Needs `lift` (see _liftosaur_summary). #}
-<style>
-    .htmx-request #autosync-spinner { display: inline-flex !important; }
-    .htmx-request.toggle-track, .htmx-request#autosync-interval { opacity: 0.5; pointer-events: none; }
-</style>
 <div class="card src-liftosaur" style="margin-bottom: 20px; border-top: 3px solid var(--src);">
     <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
         <div>
@@ -38,36 +35,8 @@
     {% endif %}
     <div id="sync-result"></div>
 
-    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--border-subtle);">
-        <div style="display: flex; align-items: center; gap: 10px;">
-            <div id="autosync-toggle" class="toggle-track {% if lift.auto_sync.enabled %}active{% endif %}"
-                 hx-post="/api/toggle-autosync" hx-target="#autosync-status" hx-swap="innerHTML"
-                 hx-vals='js:{"enabled": document.getElementById("autosync-toggle").classList.contains("active"), "interval": (document.getElementById("autosync-interval") && document.getElementById("autosync-interval").value) || "120"}'
-                 hx-disabled-elt="this, #autosync-interval" hx-indicator="#autosync-spinner, #autosync-status"
-                 onclick="this.classList.toggle('active')" role="switch"
-                 aria-checked="{{ 'true' if lift.auto_sync.enabled else 'false' }}" aria-label="Auto-sync">
-                <div class="toggle-thumb"></div>
-            </div>
-            <span style="font-size: 13px; color: var(--text-secondary);">Auto-sync <span style="color: var(--text-muted); font-size: 11px;">(new workouts only)</span></span>
-            <span id="autosync-spinner" class="htmx-indicator" style="display: none; font-size: 12px; color: var(--text-muted);">Saving…</span>
-        </div>
-        <div style="display: flex; align-items: center; gap: 6px;">
-            <label for="autosync-interval" style="font-size: 12px; color: var(--text-muted);">Every</label>
-            <select id="autosync-interval" class="interval-select"
-                    hx-post="/api/toggle-autosync" hx-target="#autosync-status" hx-swap="innerHTML"
-                    hx-vals='js:{"enabled": document.getElementById("autosync-toggle").classList.contains("active"), "interval": (document.getElementById("autosync-interval") && document.getElementById("autosync-interval").value) || "120"}'
-                    hx-disabled-elt="this, #autosync-toggle" hx-indicator="#autosync-spinner, #autosync-status" hx-trigger="change">
-                {% for minutes, label in [(30, '30 min'), (60, '1 hour'), (120, '2 hours'), (240, '4 hours'), (360, '6 hours'), (720, '12 hours'), (1440, '24 hours')] %}
-                <option value="{{ minutes }}" {{ 'selected' if lift.auto_sync.interval_minutes == minutes }}>{{ label }}</option>
-                {% endfor %}
-            </select>
-        </div>
-    </div>
-    <div id="autosync-status" style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
-        {% if lift.auto_sync.enabled %}
-            {% if lift.auto_sync.last_sync %}Last: {{ lift.auto_sync.last_sync }}{% endif %}
-            {% if lift.auto_sync.next_sync %} · Next: {{ lift.auto_sync.next_sync }}{% endif %}
-        {% endif %}
+    <div class="autosync-block">
+    {{ ui.autosync_control("autosync", "/api/toggle-autosync", lift.auto_sync.enabled, lift.auto_sync.interval_minutes, lift.autosync_intervals, "Auto-sync", "new workouts only", lift.autosync_line|safe) }}
     </div>
 </div>
 <script>

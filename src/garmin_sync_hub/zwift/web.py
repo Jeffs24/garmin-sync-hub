@@ -12,6 +12,8 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader
 
+from .. import retry, templating
+from ..activity import ZWIFT_STATES
 from ..auth import auth_enabled
 from ..garmin_session import GarminAuthRequired, shared_session
 from .config import EDITABLE, SCAN_INTERVALS, Config
@@ -23,18 +25,26 @@ from .zwift_api import ZwiftClient
 log = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
-_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
+_env = templating.register(Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True))
 
-STATUS_LABELS = {
-    "detected": "Detected",
-    "running": "Running…",
-    "queued": "Queued",
-    "simulated": "Simulated",
-    "merged": "Merged",
-    "failed": "Failed",
-    "ignored": "Ignored",
-    "restored": "Restored",
+# Same labels and colors as the Activity feed: status -> (label, state).
+STATUS_STATES = ZWIFT_STATES
+STATUS_LABELS = {status: label for status, (label, _state) in ZWIFT_STATES.items()}
+
+# Filter tabs of the Pairs page: key -> (label, statuses).
+PAIR_FILTERS = {
+    "all": ("All", None),
+    "waiting": ("Ready to merge", ("detected", "simulated", "queued", "running")),
+    "merged": ("Merged", ("merged",)),
+    "failed": ("Failed", ("failed",)),
+    "ignored": ("Ignored or restored", ("ignored", "restored")),
 }
+BUSY = ("running", "queued")
+
+
+def filter_pairs(rows: list[dict], key: str) -> list[dict]:
+    statuses = PAIR_FILTERS.get(key, PAIR_FILTERS["all"])[1]
+    return rows if statuses is None else [r for r in rows if r["status"] in statuses]
 
 _PAIR_ACTIONS = ("/scan", "/merge-all")
 _ACCOUNT_ACTIONS = ("/upload", "/login", "/logout", "/sync")
@@ -77,23 +87,11 @@ def svg_chart(name: str, points: list[tuple[float, float]], invert: bool = False
     )
 
 
-def _when(value: datetime | None) -> str:
-    if value is None:
-        return ""
-    return (f"<time data-local data-time datetime='{value.strftime('%Y-%m-%dT%H:%M:%SZ')}'>"
-            f"{value.strftime('%Y-%m-%d %H:%M')} UTC</time>")
-
-
 def autosync_status(m: "ZwiftModule") -> str:
-    """One line under the auto-sync switch: last and next scan."""
-    if not m.cfg.auto_scan:
-        return "Off: scans run only when you click “Scan now”."
-    parts = []
-    if m.state["last_scan"]:
-        parts.append("Last: " + _when(m.state["last_scan"]))
-    if m.state["next_scan"]:
-        parts.append("Next: " + _when(m.state["next_scan"]))
-    return " · ".join(parts) or f"Every {m.cfg.scan_interval_minutes} min."
+    """One line under the auto-sync switch: last and next scan (same macro as Liftosaur)."""
+    return templating.render_autosync_line(
+        _env, m.cfg.auto_scan, m.state["last_scan"], m.state["next_scan"],
+        "scans run only when you click “Scan now”.")
 
 
 class ZwiftModule:
@@ -136,7 +134,7 @@ class ZwiftModule:
             zs["error"] = str(e)
         finally:
             zs["running"] = False
-            zs["finished_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            zs["finished_at"] = datetime.now(timezone.utc)
             self._sync_lock.release()
 
     def _loop(self) -> None:
@@ -237,21 +235,38 @@ class ZwiftModule:
                 router.add_api_route(path, lambda target=target: RedirectResponse(target, status_code=303),
                                      methods=["GET"], include_in_schema=False)
 
+        def pair_ctx() -> dict:
+            return {"status_labels": STATUS_LABELS, "status_states": STATUS_STATES,
+                    "can_restore": m.service.can_restore, "auto_retry": m.cfg.auto_merge and m.cfg.auto_scan,
+                    "max_attempts": retry.MAX_ATTEMPTS, "parse_time": retry.parse}
+
         def render_tab(request: Request, tab: str) -> HTMLResponse:
-            rows = m.store.all()
-            pairs_busy = any(r["status"] in ("running", "queued") for r in rows)
-            busy = m.state["zwift"]["running"] if tab == "account" else pairs_busy
+            all_rows = m.store.all()
+            status = request.query_params.get("status", "all")
+            if status not in PAIR_FILTERS:
+                status = "all"
+            rows = filter_pairs(all_rows, status)
+            # Pairs being merged refresh their own row; only the account sync reloads the page.
+            busy = m.state["zwift"]["running"] if tab == "account" else False
             results = m.state["upload_results"] if tab == "account" else []
             if tab == "account":
                 m.state["upload_results"] = []
             return _render(
                 "zwift.html", request, tab=tab, cfg=m.cfg, rows=rows, busy=busy,
-                waiting=sum(1 for r in rows if r["status"] in ("detected", "simulated")),
+                total_pairs=len(all_rows), status_filter=status,
+                filter_labels={k: label for k, (label, _s) in PAIR_FILTERS.items()},
+                filter_counts={k: len(filter_pairs(all_rows, k)) for k in PAIR_FILTERS},
+                waiting=sum(1 for r in all_rows if r["status"] in ("detected", "simulated")),
                 garmin_connected=m.garmin.has_tokens(), zwift_connected=m.zwift.connected(),
                 zs=m.state["zwift"], last_error=m.state["last_error"], upload_results=results,
-                status_labels=STATUS_LABELS, scan_intervals=SCAN_INTERVALS,
-                autosync_status=autosync_status(m),
+                scan_intervals=SCAN_INTERVALS, autosync_status=autosync_status(m), **pair_ctx(),
             )
+
+        def render_row(request: Request, target_id: int) -> HTMLResponse:
+            row = m.store.get(target_id)
+            if not row:
+                raise HTTPException(404)
+            return _render("partials/zwift_pair_row.html", request, r=row, **pair_ctx())
 
         @router.get("", response_class=HTMLResponse)
         def page(request: Request) -> HTMLResponse:
@@ -290,9 +305,9 @@ class ZwiftModule:
                 m.cfg.update(values)
                 m.cfg.save()
             except (ValueError, OSError) as e:
-                return RedirectResponse("/settings?" + urlencode({"zwift_error": str(e)}) + "#zwift", status_code=303)
+                return RedirectResponse("/settings?" + urlencode({"error": f"Zwift settings not saved: {e}"}) + "#zwift", status_code=303)
             m.settings_changed()
-            return RedirectResponse("/settings?zwift=saved#zwift", status_code=303)
+            return RedirectResponse("/settings?saved=zwift#zwift", status_code=303)
 
         @router.post("/autosync", response_class=HTMLResponse)
         def autosync(enabled: str = Form("false"), interval: str = Form("")) -> HTMLResponse:
@@ -348,7 +363,7 @@ class ZwiftModule:
             return RedirectResponse(ACCOUNT, status_code=303)
 
         @router.post("/pairs/{target_id}/{action}")
-        def act(target_id: int, action: str) -> RedirectResponse:
+        def act(request: Request, target_id: int, action: str):
             if not m.store.get(target_id):
                 raise HTTPException(404)
             if action == "simulate":
@@ -363,7 +378,13 @@ class ZwiftModule:
                 m._run_bg(target_id, m.service.restore)
             else:
                 raise HTTPException(404)
+            if request.headers.get("HX-Request"):
+                return render_row(request, target_id)  # the row updates in place
             return RedirectResponse("/zwift", status_code=303)
+
+        @router.get("/pairs/{target_id}/row", response_class=HTMLResponse)
+        def pair_row(request: Request, target_id: int) -> HTMLResponse:
+            return render_row(request, target_id)
 
         @router.get("/pairs/{target_id}/merged.fit")
         def download(target_id: int) -> FileResponse:
