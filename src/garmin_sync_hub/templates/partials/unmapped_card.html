@@ -1,0 +1,38 @@
+{# Unmapped exercises card. Needs `unmapped` and `unmapped_stale` (true: refresh it from /liftosaur/mappings/unmapped). #}
+<div id="unmapped-card"{% if unmapped_stale %} hx-get="/liftosaur/mappings/unmapped" hx-trigger="load" hx-swap="outerHTML"{% endif %}>
+{% if unmapped %}
+<!-- Unmapped exercises with inline mapping -->
+<div class="card" style="margin-bottom: 20px; border-color: rgba(245, 158, 11, 0.3);">
+    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--amber)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span class="card-title" style="margin: 0; color: var(--amber);">{{ unmapped|length }} Unmapped Exercise{{ 's' if unmapped|length != 1 }}</span>
+    </div>
+    <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
+        These show as "Unknown" on Garmin. Pick a category below to map them.
+    </p>
+    {% for name, count in unmapped %}
+    <div style="border-top: 1px solid var(--border-subtle); padding: 10px 0;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <span style="font-size: 14px; font-weight: 600;">{{ name }}</span>
+            <span style="font-size: 12px; color: var(--text-muted);">{{ count }}x in recent</span>
+        </div>
+        <form style="display: flex; align-items: center; gap: 8px;"
+              hx-post="/api/mapping" hx-target="#map-result-{{ loop.index }}" hx-swap="innerHTML">
+            <input type="hidden" name="exercise_name" value="{{ name }}">
+            <select name="category" class="form-select cat-select" style="font-size: 12px; padding: 4px 8px; min-height: 32px; flex: 1;"
+                    onchange="showUnmappedSubs(this, {{ loop.index }})">
+            </select>
+            <input type="number" name="subcategory" id="unmapped-sub-{{ loop.index }}" value="0" min="0" class="form-input" style="width: 60px; font-size: 12px; padding: 4px 8px; min-height: 32px;" placeholder="Sub">
+            <button type="submit" class="btn btn-primary btn-sm" style="white-space: nowrap;">Map</button>
+        </form>
+        <div id="unmapped-sub-helper-{{ loop.index }}" style="margin-top: 6px; display: none;">
+            <div style="font-size: 10px; color: var(--text-muted); margin-bottom: 4px;">Sub-exercises (click to use):</div>
+            <div class="sub-id-chips" style="display: flex; flex-wrap: wrap; gap: 3px; max-height: 80px; overflow-y: auto;"></div>
+        </div>
+        <div id="map-result-{{ loop.index }}" style="margin-top: 4px;"></div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% if unmapped_stale %}<p class="form-hint" style="margin-bottom: 16px;"><span class="htmx-indicator" style="display: inline-flex; gap: 6px; align-items: center;"><span class="spinner" style="width: 12px; height: 12px;"></span>Checking recent workouts for unmapped exercises…</span></p>{% endif %}
+</div>

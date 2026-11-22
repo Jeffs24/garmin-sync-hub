@@ -138,8 +138,6 @@ _sync_executing = threading.Lock()  # Prevents concurrent sync execution
 _sync_lock_acquired_at: float = 0  # time.time() when lock was acquired
 _SYNC_LOCK_TIMEOUT = 300  # 5 minutes — force-release if exceeded
 _last_sync_time: datetime | None = None
-_unmapped_cache: list[tuple[str, int]] | None = None
-_unmapped_cache_time: float = 0
 _failed_ids: set[str] = set()  # Workouts that failed upload this session (retried next session)
 _VALID_AUTOSYNC_INTERVALS = (30, 60, 120, 240, 360, 720, 1440)
 _pending_garmin_logins: dict[str, dict[str, Any]] = {}
@@ -171,50 +169,67 @@ def _still_unmapped(items: list[tuple[str, int]]) -> list[tuple[str, int]]:
     return [(name, count) for name, count in items if lookup_exercise(name)[0] == 65534]
 
 
-def _get_unmapped_exercises(fetch: bool = True) -> list[tuple[str, int]]:
-    """Get unmapped exercises. Uses DB cache (updated during sync).
+UNMAPPED_CACHE_KEY = "unmapped_scan"   # {"counts": {name: n}, "at": ISO time}
+UNMAPPED_MAX_AGE = timedelta(hours=1)
+UNMAPPED_PAGES = 5                      # recent workouts scanned: 5 pages of 10
 
-    With fetch=False, never calls the Liftosaur API: returns whatever is cached,
-    or an empty list. Pages that only show the list in passing use that.
-    """
-    # Try DB cache first (instant)
+
+def _cached_unmapped() -> tuple[list[tuple[str, int]] | None, bool]:
+    """(unmapped exercises from the last scan or None, whether that scan is recent)."""
     try:
         _db = db.get_db()
-        cached = _db.get_app_config("unmapped_exercises")
-        if cached and isinstance(cached, dict):
-            return _still_unmapped(sorted(cached.items(), key=lambda x: -x[1]))
-    except Exception:
-        pass
+        cached = _db.get_app_config(UNMAPPED_CACHE_KEY)
+        if cached and isinstance(cached.get("counts"), dict):
+            at = datetime.fromisoformat(cached["at"]) if cached.get("at") else None
+            fresh = at is not None and datetime.now(timezone.utc) - at < UNMAPPED_MAX_AGE
+            return _still_unmapped(sorted(cached["counts"].items(), key=lambda x: -x[1])), fresh
+        legacy = _db.get_app_config("unmapped_exercises")  # before 0.4.1: counts only, no time
+        if legacy and isinstance(legacy, dict):
+            return _still_unmapped(sorted(legacy.items(), key=lambda x: -x[1])), False
+    except Exception:  # noqa: BLE001 - the list is a hint, never block a page
+        logger.debug("Could not read the unmapped exercises cache", exc_info=True)
+    return None, False
 
-    # Fallback: in-memory cache (local installs)
-    global _unmapped_cache, _unmapped_cache_time
-    import time as _t
-    if _unmapped_cache is not None and (not fetch or (_t.time() - _unmapped_cache_time) < 600):
-        return _still_unmapped(_unmapped_cache)
-    if not fetch:
-        return []
 
-    config = load_config()
-    unmapped: dict[str, int] = {}
+def _save_unmapped(counts: dict[str, int]) -> None:
+    db.get_db().set_app_config(UNMAPPED_CACHE_KEY, {
+        "counts": counts, "at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+
+
+def _scan_unmapped() -> list[tuple[str, int]]:
+    """Ask Liftosaur for recent workouts (slow: one call per page) and cache what is unmapped."""
+    from garmin_sync_hub.liftosaur.liftosaur import LiftosaurClient
+    from garmin_sync_hub.liftosaur.mapper import lookup_exercise
+
+    client = LiftosaurClient(api_key=load_config().get("liftosaur_api_key"))
+    counts: dict[str, int] = {}
+    for pg in range(1, UNMAPPED_PAGES + 1):
+        data = client.get_workouts(page=pg, page_size=10)
+        for w in data.get("workouts", []):
+            for ex in w.get("exercises", []):
+                name = ex.get("title") or ex.get("name", "")
+                if name and lookup_exercise(name)[0] == 65534:
+                    counts[name] = counts.get(name, 0) + 1
+        if pg >= data.get("page_count", 1):
+            break
+    _save_unmapped(counts)
+    return sorted(counts.items(), key=lambda x: -x[1])
+
+
+def _get_unmapped_exercises(fetch: bool = True) -> list[tuple[str, int]]:
+    """Unmapped exercises of recent workouts.
+
+    A scan less than an hour old is used as is. With fetch=False the Liftosaur API is never
+    called (whatever is cached, or an empty list); otherwise an old or missing list is rescanned.
+    """
+    cached, fresh = _cached_unmapped()
+    if fresh or not fetch:
+        return cached or []
     try:
-        from garmin_sync_hub.liftosaur.liftosaur import LiftosaurClient
-        from garmin_sync_hub.liftosaur.mapper import lookup_exercise
-        client = LiftosaurClient(api_key=config.get("liftosaur_api_key"))
-        for pg in range(1, 6):
-            data = client.get_workouts(page=pg, page_size=10)
-            for w in data.get("workouts", []):
-                for ex in w.get("exercises", []):
-                    name = ex.get("title") or ex.get("name", "")
-                    if name and lookup_exercise(name)[0] == 65534:
-                        unmapped[name] = unmapped.get(name, 0) + 1
-            if pg >= data.get("page_count", 1):
-                break
-    except Exception:
-        pass
-
-    _unmapped_cache = sorted(unmapped.items(), key=lambda x: -x[1])
-    _unmapped_cache_time = _t.time()
-    return _unmapped_cache
+        return _scan_unmapped()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Could not scan Liftosaur for unmapped exercises: %s", e)
+        return cached or []
 
 
 def _run_autosync() -> None:
@@ -992,9 +1007,9 @@ async def mappings_page(request: Request):
         cat_name = CAT_NAMES.get(cat, f"Category {cat}")
         mappings.append((name, cat, subcat, f"{cat_name} (custom)"))
 
-    # Find unmapped exercises from recent workouts (cached). A cache miss calls
-    # the Liftosaur API, so keep it off the event loop.
-    unmapped = await run_in_threadpool(_get_unmapped_exercises)
+    # Unmapped exercises: from the cache only. Scanning Liftosaur takes several API calls,
+    # so an old or missing list is refreshed by /liftosaur/mappings/unmapped after the page shows.
+    unmapped, fresh = _cached_unmapped()
 
     custom_list = [(name, cat, subcat, CAT_NAMES.get(cat, f"Category {cat}"))
                    for name, (cat, subcat) in sorted(_custom_mappings.items())]
@@ -1005,8 +1020,16 @@ async def mappings_page(request: Request):
         total=len(mappings),
         custom_count=len(_custom_mappings),
         custom_list=custom_list,
-        unmapped=unmapped,
+        unmapped=unmapped or [],
+        unmapped_stale=not fresh,
     )
+
+
+@app.get("/liftosaur/mappings/unmapped", response_class=HTMLResponse)
+async def mappings_unmapped(request: Request):
+    """The unmapped exercises card, rescanning Liftosaur when the cached list is old."""
+    unmapped = await run_in_threadpool(_get_unmapped_exercises)
+    return _render("partials/unmapped_card.html", unmapped=unmapped, unmapped_stale=False)
 
 
 @app.get("/settings", response_class=HTMLResponse)
@@ -1023,6 +1046,7 @@ async def settings_page(request: Request):
         "settings.html",
         config=config,
         zwift_cfg=zwift_module.cfg,
+        zwift_connected=zwift_module.zwift.connected(),
         unmapped=sorted(unmapped.items(), key=lambda x: -x[1]),
         garmin_connected=_has_garmin_tokens(config),
         is_cloud=False,
@@ -1083,9 +1107,6 @@ async def api_save_mapping(request: Request):
     from garmin_sync_hub.liftosaur.mapper import save_custom_mapping
     save_custom_mapping(exercise_name, category, subcategory)
 
-    global _unmapped_cache
-    _unmapped_cache = None
-
     cat_label = _get_cat_names().get(category, f"Category {category}")
     return HTMLResponse(f'<div class="toast toast-success">Mapped "{exercise_name}" → {cat_label} ({category}:{subcategory}). <a href="/liftosaur/mappings">Reload</a></div>')
 
@@ -1112,9 +1133,6 @@ async def api_delete_mapping(request: Request):
         except Exception:
             pass
     _custom_mappings.pop(exercise_name, None)
-
-    global _unmapped_cache
-    _unmapped_cache = None
 
     return HTMLResponse(f'<div class="toast toast-success">Deleted mapping for "{exercise_name}". <a href="/liftosaur/mappings">Reload</a></div>')
 
@@ -1474,7 +1492,7 @@ async def _do_sync_one(request: Request):
         page += 1
     # Update unmapped cache in DB
     if unmapped_found:
-        _db.set_app_config("unmapped_exercises", unmapped_found)
+        _save_unmapped(unmapped_found)
 
     if not unsynced:
         return JSONResponse({"synced": 0, "remaining": 0, "done": True})

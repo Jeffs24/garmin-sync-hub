@@ -330,7 +330,7 @@
         <a href="https://github.com/Jeffs24/garmin-sync-hub">garmin-sync-hub</a> &middot; Liftosaur workouts and Zwift maps for Garmin Connect &middot; based on <a href="https://github.com/drkostas/hevy2garmin">hevy2garmin</a> and <a href="https://github.com/Zettt/liftosaur2garmin">liftosaur2garmin</a>
     </footer>
     {# One-shot notices after a redirect: ?saved=<key> or ?error=<message>. #}
-    {% set notices = {"settings": "Settings saved.", "zwift": "Zwift settings saved.", "workout": "Workout sent to Garmin.", "unsynced": "Workout marked as not synced.", "undone": "Garmin activity deleted, the workout is pending again."} %}
+    {% set notices = {"settings": "Settings saved.", "zwift": "Zwift settings saved.", "zwift-connected": "Zwift account connected.", "zwift-disconnected": "Zwift account disconnected.", "workout": "Workout sent to Garmin.", "unsynced": "Workout marked as not synced.", "undone": "Garmin activity deleted, the workout is pending again."} %}
     {% set q = request.query_params if request else {} %}
     <div id="toasts" role="status" aria-live="polite">
         {% if q.get("saved") in notices %}<div class="toast toast-success" data-auto><span>{{ notices[q.get("saved")] }}</span><button type="button" aria-label="Dismiss">&times;</button></div>{% endif %}

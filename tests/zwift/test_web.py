@@ -38,13 +38,13 @@ def test_zwift_page_lists_pairs_and_escapes(client):
     assert "/zwift/pairs/1/merge" in r.text
     assert "Merge all (1)" in r.text
     assert 'href="/zwift" class="active"' in r.text
-    assert "Connect Zwift" in c.get("/zwift/account").text
+    assert "Settings → Zwift" in c.get("/zwift/account").text  # the account is connected from Settings
 
 
 def test_get_on_action_urls_goes_back_to_the_page(client):
     c, _ = client
     for path, target in ((("/zwift/scan", "/zwift"), ("/zwift/merge-all", "/zwift"),
-                          ("/zwift/sync", "/zwift/account"), ("/zwift/login", "/zwift/account"))):
+                          ("/zwift/sync", "/zwift/account"), ("/zwift/login", "/settings#zwift"))):
         r = c.get(path, follow_redirects=False)
         assert r.status_code == 303 and r.headers["location"] == target
 
@@ -140,7 +140,6 @@ def test_settings_never_calls_the_liftosaur_api(client, monkeypatch):
         raise AssertionError("settings page called the Liftosaur API")
 
     monkeypatch.setattr(server, "load_config", lambda: {"liftosaur_api_key": "x", "user_profile": {}, "timing": {}})
-    monkeypatch.setattr(server, "_unmapped_cache", None)
     monkeypatch.setattr(liftosaur.LiftosaurClient, "get_workouts", boom)
     r = c.get("/settings")
     assert r.status_code == 200
@@ -295,3 +294,25 @@ def test_failed_pair_shows_its_next_retry(client):
         assert "Next try with auto-merge" in c.get("/zwift").text
     finally:
         m.cfg.auto_merge = False
+
+
+def test_zwift_account_is_connected_from_settings(client, monkeypatch):
+    c, m = client
+    monkeypatch.setattr(m.zwift, "connected", lambda: False)
+    page = c.get("/settings").text
+    assert 'action="/zwift/login"' in page and 'form="zwift-login"' in page and "Connect Zwift" in page
+
+    def refuse(email, password):
+        raise RuntimeError("bad password")
+
+    monkeypatch.setattr(m.zwift, "login", refuse)
+    r = c.post("/zwift/login", data={"email": "a@b.c", "password": "x"}, follow_redirects=False)
+    assert r.headers["location"].startswith("/settings?error=Zwift+login+refused")
+    assert r.headers["location"].endswith("#zwift")
+
+    monkeypatch.setattr(m.zwift, "login", lambda email, password: None)
+    r = c.post("/zwift/login", data={"email": "a@b.c", "password": "x"}, follow_redirects=False)
+    assert r.headers["location"] == "/settings?saved=zwift-connected#zwift"
+    monkeypatch.setattr(m.zwift, "connected", lambda: True)
+    assert "Zwift account connected." in c.get(r.headers["location"]).text
+    assert 'form="zwift-logout"' in c.get("/settings").text

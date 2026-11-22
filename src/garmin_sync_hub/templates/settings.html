@@ -102,13 +102,42 @@
     </div>
 
     <!-- Zwift Section -->
+    {# Zwift account: its fields belong to the zwift-login / zwift-logout forms below the main form. #}
+    <div class="card section" data-tab="zwift" id="zwift-account">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px;">
+            <span class="card-title">Zwift account</span>
+            {% if zwift_connected %}<span class="badge badge-success">Connected</span>{% else %}<span class="badge badge-pending">Not connected</span>{% endif %}
+        </div>
+        {% if zwift_connected %}
+        <div class="form-hint" style="line-height: 1.7; margin-bottom: 12px;">
+            New Zwift activities are fetched at each scan when “Fetch new Zwift activities” is on.
+            To catch up on older ones, use <a href="/zwift/account">Zwift → History and files</a>.
+        </div>
+        <button type="submit" form="zwift-logout" class="btn btn-secondary btn-sm">Disconnect Zwift</button>
+        {% else %}
+        <div class="form-hint" style="line-height: 1.7; margin-bottom: 12px;">
+            Connect Zwift to fetch your Zwift FIT files automatically, including your whole history.
+            This uses Zwift's unofficial Companion API. Your password is not stored, only the tokens.
+        </div>
+        <div class="form-grid">
+            <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label" for="zwift-email">Zwift email</label>
+                <input class="form-input" id="zwift-email" name="email" type="email" autocomplete="username" required form="zwift-login">
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label" for="zwift-password">Zwift password</label>
+                <input class="form-input" id="zwift-password" name="password" type="password" autocomplete="current-password" required form="zwift-login">
+            </div>
+        </div>
+        <button type="submit" form="zwift-login" class="btn btn-primary btn-sm" style="margin-top: 12px;">Connect Zwift</button>
+        {% endif %}
+    </div>
+
     <div class="card section" data-tab="zwift">
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
             <span class="card-title">Zwift maps</span>
-            <a href="/zwift/account" class="btn btn-secondary btn-sm">Zwift account</a>
         </div>
         <div class="form-hint" style="line-height: 1.7; margin-bottom: 12px;">
-            Connect the Zwift account from <a href="/zwift/account">Zwift → Account and files</a>.
             Changes apply right away. The <code>ZWIFT_*</code> variables in <code>.env</code> only give the starting values.
         </div>
         {% if zwift_cfg %}
@@ -321,6 +350,8 @@
 </form>
 {# The Zwift tab's fields sit inside the form above but belong to this one (form="zwift-settings"). #}
 <form id="zwift-settings" method="post" action="/zwift/settings"></form>
+<form id="zwift-login" method="post" action="/zwift/login"></form>
+<form id="zwift-logout" method="post" action="/zwift/logout"></form>
 
 {% if unmapped %}
 <div class="card" style="margin-top: 28px;" data-tab="liftosaur">

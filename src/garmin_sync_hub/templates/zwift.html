@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% import "partials/ui.html" as ui %}
-{% block title %}{{ "Account" if tab == "account" else "Pairs" }} · Zwift · garmin-sync-hub{% endblock %}
+{% block title %}{{ "History and files" if tab == "account" else "Pairs" }} · Zwift · garmin-sync-hub{% endblock %}
 {% block head %}
 {% if busy %}<meta http-equiv="refresh" content="5">{% endif %}
 <style>
@@ -52,8 +52,8 @@
 <div class="card">
     {% if zwift_connected %}
     <div class="zw-row" style="justify-content: space-between;">
-        <div class="card-title">Zwift account: connected</div>
-        <form method="post" action="/zwift/logout"><button class="btn btn-secondary btn-sm">Disconnect Zwift</button></form>
+        <div class="card-title">Zwift history</div>
+        <a href="/settings#zwift" class="btn btn-secondary btn-sm">Zwift account</a>
     </div>
     <p class="zw-msg">
         {% if cfg.zwift_auto_sync %}New Zwift activities are fetched at each scan ({{ cfg.scan_days }} days).{% else %}Automatic fetch is off (<a href="/settings#zwift">Settings → Zwift</a>).{% endif %}
@@ -75,15 +75,9 @@
     {% endif %}
     {% if zs.last %}<p class="zw-msg">{{ zs.last }}</p>{% endif %}
     {% else %}
-    <div class="card-title">Zwift account</div>
-    <p class="zw-msg">Connect Zwift to fetch your Zwift FIT files automatically, including your whole history.
-        This uses Zwift's unofficial Companion API. Your password is not stored, only the tokens.</p>
-    {% if zs.login_error %}<p class="state-failed zw-msg">{{ zs.login_error }}</p>{% endif %}
-    <form method="post" action="/zwift/login" class="zw-row" style="margin-top: 12px;">
-        <input class="form-input" name="email" type="email" placeholder="Zwift email" required>
-        <input class="form-input" name="password" type="password" placeholder="Zwift password" required>
-        <button class="btn btn-primary btn-sm">Connect Zwift</button>
-    </form>
+    <div class="card-title">Zwift history</div>
+    <p class="zw-msg">Connect your Zwift account in <a href="/settings#zwift">Settings → Zwift</a> to fetch your Zwift FIT files
+        automatically, including your whole history. Without it, upload the files below.</p>
     {% endif %}
 </div>
 
@@ -116,7 +110,7 @@
 {% elif total_pairs %}
 <div class="card"><p class="empty">No pair with this status. <a href="/zwift">Show all</a></p></div>
 {% else %}
-<div class="card"><p class="zw-msg">No watch + Zwift pair found yet. Connect your Zwift account or upload Zwift FIT files in <a href="/zwift/account">Account and files</a>.</p></div>
+<div class="card"><p class="zw-msg">No watch + Zwift pair found yet. Connect your Zwift account in <a href="/settings#zwift">Settings → Zwift</a>, or upload Zwift FIT files in <a href="/zwift/account">History and files</a>.</p></div>
 {% endif %}
 {% with open = not total_pairs %}{% include "partials/zwift_flow.html" %}{% endwith %}
 {% endif %}

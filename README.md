@@ -27,6 +27,8 @@ Open `http://SERVER:8127`. The setup page asks for:
 2. **Liftosaur API key** (optional): only needed for the Liftosaur module. In Liftosaur: Settings → API Keys.
 3. Your profile (weight, birth year, sex), used for calorie estimation in Liftosaur FIT files.
 
+To update: `docker compose pull && docker compose up -d`. The image `:1` follows every 1.x release; pin an exact version (`:1.0.0`) to update only when you choose.
+
 Set `HUB_PASSWORD` in `.env` to protect the web UI with a password if it can be reached from outside your network.
 
 ## Liftosaur → Garmin
@@ -62,7 +64,7 @@ Every Garmin step is checked against the activity list, since Garmin sometimes a
 
 ### Zwift account and history
 
-Connect your Zwift account in **Zwift → Account and files** and click **Sync history** from a date: the app lists your Zwift activities through Zwift's unofficial Companion API and downloads the FIT file of each one that overlaps a watch activity without a map. Once connected, new Zwift activities are also fetched at each scan. Only the Zwift tokens are stored, in `data/zwift_tokens.json`.
+Connect your Zwift account in **Settings → Zwift**, then click **Sync history** in **Zwift → History and files** from a date: the app lists your Zwift activities through Zwift's unofficial Companion API and downloads the FIT file of each one that overlaps a watch activity without a map. Once connected, new Zwift activities are also fetched at each scan. Only the Zwift tokens are stored, in `data/zwift_tokens.json`.
 
 Without a Zwift account, you can upload Zwift FIT files by hand: from zwift.com (activity → Download .fit) or from your Strava data export (`activities/` folder, `.fit.gz` accepted).
 

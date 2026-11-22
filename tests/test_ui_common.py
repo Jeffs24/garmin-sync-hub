@@ -130,3 +130,30 @@ def test_undo_keeps_the_record_when_garmin_refuses(client, monkeypatch):
     r = client.post("/api/workouts/undo-3/undo", headers={"HX-Request": "true"})
     assert db.is_synced("undo-3")
     assert "Garmin said no" in json.loads(r.headers["HX-Trigger"])["notify"]["message"]
+
+
+def test_mappings_page_never_waits_for_liftosaur(client, monkeypatch):
+    from garmin_sync_hub.liftosaur import liftosaur
+
+    calls = []
+
+    def get_workouts(self, page=1, page_size=10):
+        calls.append(page)
+        return {"workouts": [{"exercises": [{"title": "Zorbo press"}]}], "page_count": 1}
+
+    monkeypatch.setattr(server, "load_config", lambda: {"liftosaur_api_key": "k"})
+    monkeypatch.setattr(liftosaur.LiftosaurClient, "get_workouts", get_workouts)
+    _db = db.get_db()
+    _db.set_app_config(server.UNMAPPED_CACHE_KEY, {})
+    try:
+        page = client.get("/liftosaur/mappings").text
+        assert calls == []  # the page itself never calls the API
+        assert 'hx-get="/liftosaur/mappings/unmapped"' in page  # the list is refreshed after it shows
+        card = client.get("/liftosaur/mappings/unmapped").text
+        assert calls == [1] and "Zorbo press" in card and "hx-get" not in card
+        page = client.get("/liftosaur/mappings").text  # now cached and recent
+        assert "Zorbo press" in page and 'hx-get="/liftosaur/mappings/unmapped"' not in page
+        client.get("/liftosaur/mappings/unmapped")
+        assert calls == [1]  # a recent scan is not repeated
+    finally:
+        _db.set_app_config(server.UNMAPPED_CACHE_KEY, {})

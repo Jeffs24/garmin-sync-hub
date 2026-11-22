@@ -47,7 +47,9 @@ def filter_pairs(rows: list[dict], key: str) -> list[dict]:
     return rows if statuses is None else [r for r in rows if r["status"] in statuses]
 
 _PAIR_ACTIONS = ("/scan", "/merge-all")
-_ACCOUNT_ACTIONS = ("/upload", "/login", "/logout", "/sync")
+_ACCOUNT_ACTIONS = ("/upload", "/sync")
+_SETTINGS_ACTIONS = ("/login", "/logout")
+SETTINGS = "/settings#zwift"  # the Zwift account is connected from Settings → Zwift
 ACCOUNT = "/zwift/account"
 
 
@@ -112,7 +114,7 @@ class ZwiftModule:
             "next_scan": None,
             "upload_results": [],
             "zwift": {"running": False, "counts": None, "last": None, "error": None,
-                      "login_error": None, "since": None, "finished_at": None},
+                      "since": None, "finished_at": None},
         }
         self.router = self._build_router()
 
@@ -230,7 +232,7 @@ class ZwiftModule:
         router = APIRouter(prefix="/zwift")
         m = self
 
-        for paths, target in ((_PAIR_ACTIONS, "/zwift"), (_ACCOUNT_ACTIONS, ACCOUNT)):
+        for paths, target in ((_PAIR_ACTIONS, "/zwift"), (_ACCOUNT_ACTIONS, ACCOUNT), (_SETTINGS_ACTIONS, SETTINGS)):
             for path in paths:
                 router.add_api_route(path, lambda target=target: RedirectResponse(target, status_code=303),
                                      methods=["GET"], include_in_schema=False)
@@ -342,15 +344,15 @@ class ZwiftModule:
         def zwift_login(email: str = Form(...), password: str = Form(...)) -> RedirectResponse:
             try:
                 m.zwift.login(email, password)
-                m.state["zwift"]["login_error"] = None
             except Exception as e:  # noqa: BLE001
-                m.state["zwift"]["login_error"] = f"Zwift login refused: {e}"
-            return RedirectResponse(ACCOUNT, status_code=303)
+                return RedirectResponse("/settings?" + urlencode({"error": f"Zwift login refused: {e}"}) + "#zwift",
+                                        status_code=303)
+            return RedirectResponse("/settings?saved=zwift-connected#zwift", status_code=303)
 
         @router.post("/logout")
         def zwift_logout() -> RedirectResponse:
             m.zwift.logout()
-            return RedirectResponse(ACCOUNT, status_code=303)
+            return RedirectResponse("/settings?saved=zwift-disconnected#zwift", status_code=303)
 
         @router.post("/sync")
         def zwift_sync_route(since: str = Form(...)) -> RedirectResponse:
