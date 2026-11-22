@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% import "partials/ui.html" as ui %}
+{% block title %}Backup · garmin-sync-hub{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Backup</h1>
+    <p>A copy of your whole Garmin Connect account: every activity as its original file, your account data and your daily health data.</p>
+</div>
+
+{% if not b.garmin_connected %}
+<div class="toast toast-error" style="margin-bottom: 16px;">Garmin is not connected. <a href="/settings#garmin">Connect it in Settings</a>.</div>
+{% endif %}
+
+{% include "partials/backup_status.html" %}
+
+<div class="card" style="margin-bottom: 16px;">
+    <div class="card-title" style="margin-bottom: 8px;">Where it goes</div>
+    <ul style="margin: 0 0 0 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.8;">
+        <li>Folder on the server: <code>{{ root }}</code>{% if root|string == "/backup" %} (the <code>./garmin-backup</code> folder next to <code>docker-compose.yml</code>){% endif %}.</li>
+        <li>{% if s.rclone_remote %}Copied after each backup to <b>{{ s.rclone_remote }}</b> with rclone.{% else %}Not copied elsewhere. Google Drive, OneDrive, Dropbox, a NAS… can be added in <a href="/settings#backup">Settings → Backup</a>.{% endif %}</li>
+        <li>As a zip file, with the button above.</li>
+    </ul>
+</div>
+
+<details class="card">
+    <summary class="card-title" style="cursor: pointer;">What is saved</summary>
+    <ul style="margin: 12px 0 0 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.8;">
+        <li><b>activities/</b>: every activity as the file Garmin keeps (FIT for watch activities), sorted by category and year, plus Garmin's summary (.json) and <code>index.csv</code>. Re-import a file in Garmin Connect with Import Data.</li>
+        <li><b>account/</b>: profile, settings, devices, personal records, goals, heart rate zones.</li>
+        <li><b>gear/</b>: all your gear, active and retired, with its totals (distance, time), its default activity types and the activities it was used in.</li>
+        <li><b>workouts/</b> and <b>courses/</b>: as FIT files (and GPX for courses).</li>
+        <li><b>history/</b>: one file per year for the calendar, body composition, weigh-ins, blood pressure, endurance and hill scores, race predictions.</li>
+        <li><b>health/</b>{% if not s.health %} (off in <a href="/settings#backup">Settings</a>){% endif %}: one file per metric and per day (daily summary, sleep, HRV, heart rate, stress, Body Battery, steps, SpO2, respiration, training readiness, VO2 max, weight…){% if s.health_since %} since {{ s.health_since }}{% else %} since your first activity{% endif %}, plus <code>daily_summary.csv</code>.</li>
+    </ul>
+    <p class="pipeline-note">A file already saved is never downloaded again, so each run only adds what is new. The first run is long: Garmin limits how fast data can be read, and an interrupted run resumes where it stopped.</p>
+</details>
+{% endblock %}

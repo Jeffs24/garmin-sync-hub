@@ -102,6 +102,11 @@ from garmin_sync_hub.zwift.web import ZwiftModule  # noqa: E402
 zwift_module = ZwiftModule()
 app.include_router(zwift_module.router)
 
+from garmin_sync_hub.backup.web import BackupModule  # noqa: E402
+
+backup_module = BackupModule()
+app.include_router(backup_module.router)
+
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon_ico() -> FileResponse:
@@ -390,6 +395,7 @@ def _start_background_jobs() -> None:
     for message in obsolete_env_messages():
         logger.warning(message)
     zwift_module.start()
+    backup_module.start()
     _garmin_check_stop.clear()
     threading.Thread(target=_garmin_health_loop, name="garmin-check", daemon=True).start()
     config = load_config()
@@ -403,6 +409,7 @@ def _start_background_jobs() -> None:
 def _stop_background_jobs() -> None:
     _garmin_check_stop.set()
     zwift_module.stop()
+    backup_module.stop()
     _stop_autosync()
 
 
@@ -559,6 +566,7 @@ async def overview(request: Request, feed: str = "all"):
         garmin=_garmin_health(),
         lift=_liftosaur_summary(config),
         zwift=zwift_module.summary(),
+        backup=backup_module.summary(),
         feed=feed,
         events=activity.filter_events(events, feed)[:10],
         feed_counts=activity.counts(events),
@@ -1075,6 +1083,9 @@ async def settings_page(request: Request):
         config=config,
         zwift_cfg=zwift_module.cfg,
         zwift_connected=zwift_module.zwift.connected(),
+        backup_settings=backup_module.settings,
+        backup_root=backup_module.root,
+        rclone_config=backup_module.rclone_config(),
         unmapped=sorted(unmapped.items(), key=lambda x: -x[1]),
         garmin_connected=_has_garmin_tokens(config),
         is_cloud=False,

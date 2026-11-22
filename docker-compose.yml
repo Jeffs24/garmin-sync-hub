@@ -16,3 +16,5 @@ services:
       TZ: ${TZ:-UTC}
     volumes:
       - ./data:/data
+      # Backup of your Garmin account (Backup page). Point it to a NAS or another disk if you like.
+      - ./garmin-backup:/backup

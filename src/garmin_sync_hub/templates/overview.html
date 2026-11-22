@@ -62,6 +62,22 @@
             {% if not zwift.zwift_connected %}<a href="/settings#zwift" class="btn btn-secondary btn-sm">Connect Zwift</a>{% endif %}
         </div>
     </div>
+
+    {# Backup #}
+    <div class="card source-card src-backup">
+        <div class="source-name">Backup</div>
+        <div class="source-main {% if backup.error %}state-failed{% elif not backup.last_ok %}state-pending{% endif %}">
+            {% if backup.running %}Backing up…{% elif backup.last_ok %}{{ backup.counts.activities or 0 }} activit{{ 'y' if backup.counts.activities == 1 else 'ies' }} saved{% else %}No backup yet{% endif %}
+        </div>
+        <div class="source-meta">
+            {% if backup.last_ok %}Last backup <time data-local data-time datetime="{{ backup.last_ok.isoformat() }}"></time> · {% endif %}
+            {% if backup.auto %}Every {{ backup.interval_minutes|interval_label }}{% else %}Automatic backup off{% endif %}
+        </div>
+        {% if backup.error %}<div class="source-meta state-failed">{{ backup.error }}</div>{% endif %}
+        <div class="source-actions">
+            <a href="/backup" class="btn {% if not backup.last_ok %}btn-primary{% else %}btn-secondary{% endif %} btn-sm">{% if backup.last_ok %}Backup{% else %}Set up backup{% endif %}</a>
+        </div>
+    </div>
 </div>
 
 <div class="card" style="padding-bottom: 8px;">

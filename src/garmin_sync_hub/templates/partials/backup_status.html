@@ -1,0 +1,66 @@
+{# Backup status card. Refreshes itself every 3 s while a backup or a zip is in progress.
+   Needs the context of BackupModule page_ctx(). #}
+{% import "partials/ui.html" as ui %}
+{% set busy = b.running or export.running %}
+<div id="backup-status" class="card src-backup" style="border-top: 3px solid var(--src); margin-bottom: 16px;"
+     {% if busy %}hx-get="/backup/status" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap;">
+        <div>
+            <div style="font-size: 18px; font-weight: 700;">
+                {% if b.running %}Backing up…{% elif b.last_ok %}{{ b.counts.activities or 0 }} activit{{ 'y' if b.counts.activities == 1 else 'ies' }} saved{% else %}No backup yet{% endif %}
+            </div>
+            <div class="autosync-status">
+                {% if b.last_ok %}Last complete backup {{ ui.local_time(b.last_ok) }}.{% endif %}
+                {% if b.counts and not b.running %}{% set n = b.counts %}{{ n.health_days or 0 }} day{{ '' if n.health_days == 1 else 's' }} of health data · {{ n.gear or 0 }} piece{{ '' if n.gear == 1 else 's' }} of gear · {{ n.workouts or 0 }} workout{{ '' if n.workouts == 1 else 's' }} · {{ n.courses or 0 }} course{{ '' if n.courses == 1 else 's' }} · {{ (b.counts.size or 0)|filesize }}{% endif %}
+            </div>
+        </div>
+        <div class="zw-actions" style="display: flex; gap: 8px;">
+            {% if b.running %}
+            <button class="btn btn-secondary btn-sm" hx-post="/backup/stop" hx-target="#backup-status" hx-swap="outerHTML">Stop</button>
+            {% else %}
+            <button class="btn btn-primary btn-sm" hx-post="/backup/run" hx-target="#backup-status" hx-swap="outerHTML"
+                    hx-disabled-elt="this" {% if not b.garmin_connected %}disabled title="Connect Garmin first"{% endif %}>Back up now</button>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if b.running and progress %}
+    <div style="margin-top: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary);">
+            <span class="spinner"></span>
+            <span>{{ phases.get(progress.phase, progress.phase or "Starting") }}{% if progress.total %}: {{ progress.done }} / {{ progress.total }}{% endif %}{% if progress.message %} · {{ progress.message }}{% endif %}</span>
+        </div>
+        <div style="margin-top: 6px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden;">
+            <div style="height: 100%; width: {{ (100 * progress.done / progress.total)|round|int if progress.total else 0 }}%; background: var(--src); transition: width 0.3s;"></div>
+        </div>
+    </div>
+    {% elif b.error %}
+    <p class="state-failed" style="font-size: 13px; margin-top: 10px;">{{ b.error }}</p>
+    {% endif %}
+
+    {% if warnings and not b.running %}
+    <details style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">
+        <summary style="cursor: pointer;">{{ warnings|length }} item{{ '' if warnings|length == 1 else 's' }} could not be saved last time (retried at the next run)</summary>
+        <ul style="margin: 6px 0 0 18px;">{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+
+    <div class="autosync-block">
+        {{ ui.autosync_control("bk-autosync", "/backup/autosync", s.auto, s.interval_minutes, intervals, "Automatic backup", "adds only what is new", autosync_line|safe) }}
+    </div>
+
+    <div class="autosync-block" style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
+        <div style="font-size: 13px; color: var(--text-secondary);">
+            {% if export.running %}<span class="spinner" style="display: inline-block; width: 12px; height: 12px; vertical-align: -2px;"></span>
+                Building the zip{% if export.total %}: {{ export.done }} / {{ export.total }} files{% endif %}…
+            {% elif latest_export %}Zip ready: <b>{{ latest_export.name }}</b> ({{ latest_export_size|filesize }})
+            {% else %}Download everything as one zip file.{% endif %}
+            {% if export.error %}<div class="state-failed">{{ export.error }}</div>{% endif %}
+        </div>
+        <div style="display: flex; gap: 8px;">
+            {% if latest_export and not export.running %}<a class="btn btn-primary btn-sm" href="/backup/export/download">Download zip</a>{% endif %}
+            <button class="btn btn-secondary btn-sm" hx-post="/backup/export" hx-target="#backup-status" hx-swap="outerHTML"
+                    {% if export.running or b.running or not b.last_finished %}disabled{% endif %}>{% if latest_export %}Build a new zip{% else %}Build zip{% endif %}</button>
+        </div>
+    </div>
+</div>

@@ -2,20 +2,22 @@
 
 Garmin Connect automations in one self-hosted app, with one Garmin login:
 
-- **Liftosaur → Garmin**: turns your Liftosaur workouts into Garmin strength activities, with exercises, sets, reps and weights mapped to Garmin's exercise catalog, calories, and heart rate merged from your watch.
+- **Liftosaur → Garmin**: turns your Liftosaur workouts into Garmin strength activities, with exercises, sets, reps and weights mapped to Garmin's exercise catalog; when your watch recorded the session, the sets are written into that activity, which keeps its heart rate.
 - **Zwift maps**: adds the Zwift map to the activity your watch recorded during a Zwift session, so you keep the watch's full data (heart rate, footpod, running dynamics, Training Effect) *and* get the map.
+- **Garmin backup**: a copy of your whole Garmin Connect account (every activity as its original FIT file, gear, account data, daily health data), updated automatically, downloadable as a zip and copied to Google Drive or elsewhere with rclone.
 
 It runs as one Docker container with a web UI:
 
 - **Overview**: one card per source (Garmin, Liftosaur, Zwift) with its state, what is pending and a quick action, plus the latest activity. The Garmin card checks the connection every 30 minutes (or on **Check now**) and warns a week before the Garmin sign-in expires.
 - **Activity**: everything sent to Garmin, from every source, with tabs to filter by source or show only what needs your attention (failures, pairs waiting to be merged).
 - **Liftosaur** and **Zwift**: one section per source, with its own pages.
-- **Settings**: one tab per source.
+- **Backup**: the Garmin account backup.
+- **Settings**: one tab per source, plus Backup.
 
 ## Install (Docker compose)
 
 ```sh
-mkdir garmin-sync-hub && cd garmin-sync-hub
+mkdir -p garmin-sync-hub/data garmin-sync-hub/garmin-backup && cd garmin-sync-hub
 curl -O https://raw.githubusercontent.com/Jeffs24/garmin-sync-hub/main/docker-compose.yml
 curl -o .env https://raw.githubusercontent.com/Jeffs24/garmin-sync-hub/main/.env.example
 docker compose up -d
@@ -70,6 +72,33 @@ Without a Zwift account, you can upload Zwift FIT files by hand: from zwift.com 
 
 Offline merge of two files: `garmin-sync-hub zwift-merge-files watch.fit zwift.fit -o merged.fit`.
 
+## Garmin backup
+
+**Backup** saves your whole Garmin Connect account into the `garmin-backup/` folder (`/backup` in the container). Each run only adds what is new; the first one is long, because Garmin limits how fast data can be read, and an interrupted run resumes where it stopped. Turn on **Automatic backup** on the same page (once a day by default).
+
+```
+activities/<category>/<year>/<date>_<name>_<id>.fit   the original file, re-importable in Garmin Connect (Import Data)
+activities/<category>/<year>/<date>_<name>_<id>.json  name, description, weather, time in HR zones, strength sets
+activities/index.csv                                  one line per activity
+gear/                     all gear, active and retired: details, totals, default activity types, activities used in
+account/                  profile, statistics, devices and their settings, personal records, goals, zones,
+                          FTP, lactate threshold, race predictions, fitness age, one-rep max, badges, plans…
+workouts/  courses/       as FIT files (and GPX for courses)
+health/<metric>/<year>/<date>.json   one file per metric and day: sleep, HRV, heart rate, stress, Body Battery,
+                          steps, SpO2, respiration, training readiness, VO2 max, weight… (+ daily_summary.csv)
+history/<name>/<year>.json           calendar, body composition, weigh-ins, blood pressure, scores, predictions
+```
+
+Health data covers the days since your first activity (or the date set in **Settings → Backup**, where it can also be turned off). The **Build zip** button makes one zip of everything to download.
+
+**Google Drive, OneDrive, Dropbox, a NAS…**: after each backup, new files can be copied with [rclone](https://rclone.org) (included in the image). Set up the connection once:
+
+```sh
+docker compose exec garmin-sync-hub rclone config --config /data/rclone.conf
+```
+
+For Google Drive, choose `drive`, answer `n` to "auto config" and follow the link it gives. Then enter the destination (for example `gdrive:Garmin`) in **Settings → Backup** and click **Test**. Nothing is ever deleted at the destination. To keep the backup on another disk instead, change `./garmin-backup` in `docker-compose.yml`.
+
 ## Configuration (`.env`)
 
 Garmin, Liftosaur and Zwift are set up in the web UI (**Settings**), sign-ins included: only tokens are stored, never a password. The `.env` file holds what the UI cannot:
@@ -95,6 +124,11 @@ Everything lives in the `data/` volume (`DATA_DIR`):
 | `zwift.db` | Zwift pairs and their status |
 | `zwift_tokens.json` | Zwift tokens |
 | `zwift_backups/` | original and merged FIT files |
+| `backup_settings.json`, `backup_state.json` | Garmin backup settings and last run |
+| `rclone.conf` | rclone connections (Google Drive…) |
+| `backup_exports/` | the latest backup zip |
+
+The Garmin backup itself is in its own volume, `garmin-backup/` (`BACKUP_DIR`).
 
 ## Good to know
 

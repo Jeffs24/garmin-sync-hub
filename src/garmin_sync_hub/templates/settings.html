@@ -49,6 +49,7 @@
     <button type="button" role="tab" data-tab-button="garmin">Garmin</button>
     <button type="button" role="tab" data-tab-button="liftosaur">Liftosaur</button>
     <button type="button" role="tab" data-tab-button="zwift">Zwift</button>
+    <button type="button" role="tab" data-tab-button="backup">Backup</button>
 </nav>
 
 <form method="post" action="/settings">
@@ -343,6 +344,49 @@
         </details>
     </div>
 
+    {# Backup: its fields belong to the backup-settings form below the main form. #}
+    <div class="card section" data-tab="backup">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <span class="card-title">Garmin backup</span>
+            <a href="/backup" class="btn btn-secondary btn-sm">Backup page</a>
+        </div>
+        <div class="form-hint" style="line-height: 1.7; margin-bottom: 12px;">
+            Saved in <code>{{ backup_root }}</code>. Run it and turn on the automatic backup on the <a href="/backup">Backup page</a>.
+        </div>
+        <div class="form-group">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="hidden" name="health" value="off" form="backup-settings">
+                <input type="checkbox" name="health" value="on" form="backup-settings" {{ 'checked' if backup_settings.health }} style="width: 18px; height: 18px; accent-color: var(--accent);">
+                <span style="font-size: 14px;">Daily health data</span>
+            </label>
+            <div class="form-hint">18 metrics, one file per metric and per day: daily summary, sleep, HRV, heart rate, resting heart rate, stress, Body Battery, steps, floors, intensity minutes, respiration, SpO2, hydration, weight, training readiness and status, VO2 max, events. Plus, per year: body composition, weigh-ins, blood pressure, endurance and hill scores, race predictions. About 18 requests per day of history: the first backup takes hours (it resumes if interrupted).</div>
+        </div>
+        <div class="form-group">
+            <label class="form-label" for="health_since">Health data since</label>
+            <input class="form-input" type="date" id="health_since" name="health_since" value="{{ backup_settings.health_since }}" form="backup-settings" style="max-width: 220px;">
+            <div class="form-hint">Empty: since your first activity on Garmin Connect.</div>
+        </div>
+    </div>
+
+    <div class="card section" data-tab="backup">
+        <span class="card-title">Copy elsewhere (rclone)</span>
+        <div class="form-hint" style="line-height: 1.7; margin: 8px 0 12px;">
+            After each backup, new files are copied to Google Drive, OneDrive, Dropbox, a NAS (SFTP, SMB) or S3 with
+            <a href="https://rclone.org" target="_blank" rel="noopener">rclone</a>. Set up the connection once on the server:
+            <code>docker compose exec garmin-sync-hub rclone config --config {{ rclone_config }}</code>
+            (for Google Drive, answer “n” to auto config and follow the link it gives). Nothing is deleted at the destination.
+        </div>
+        <div class="form-group" style="margin-bottom: 8px;">
+            <label class="form-label" for="rclone_remote">Destination</label>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <input class="form-input" id="rclone_remote" name="rclone_remote" value="{{ backup_settings.rclone_remote }}" placeholder="gdrive:Garmin" form="backup-settings" style="max-width: 320px;">
+                <button type="button" class="btn btn-secondary btn-sm" hx-post="/backup/rclone/test" hx-include="#rclone_remote" hx-vals='js:{"remote": document.getElementById("rclone_remote").value}' hx-target="#rclone-test" hx-swap="innerHTML">Test</button>
+            </div>
+            <div class="form-hint">remote:folder, the remote being the name you gave in rclone config. Empty: no copy.</div>
+            <div id="rclone-test" class="form-hint"></div>
+        </div>
+    </div>
+
     <button type="submit" class="btn btn-primary" id="settings-save">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
         <span id="settings-save-label">Save settings</span>
@@ -352,6 +396,7 @@
 <form id="zwift-settings" method="post" action="/zwift/settings"></form>
 <form id="zwift-login" method="post" action="/zwift/login"></form>
 <form id="zwift-logout" method="post" action="/zwift/logout"></form>
+<form id="backup-settings" method="post" action="/backup/settings"></form>
 
 {% if unmapped %}
 <div class="card" style="margin-top: 28px;" data-tab="liftosaur">
@@ -372,7 +417,7 @@
 
 // Settings tabs: show one group of sections, keep it in the URL hash and across saves.
 (function () {
-    const tabs = ["garmin", "liftosaur", "zwift"];
+    const tabs = ["garmin", "liftosaur", "zwift", "backup"];
     const form = document.querySelector('form[action^="/settings"]');
     function show(name) {
         if (!tabs.includes(name)) name = "garmin";
@@ -386,9 +431,10 @@
             form.action = "/settings#" + name;
             // One Save button per tab: on the Zwift tab it submits the Zwift form.
             const save = document.getElementById("settings-save");
-            if (name === "zwift") save.setAttribute("form", "zwift-settings"); else save.removeAttribute("form");
+            const ownForm = { zwift: "zwift-settings", backup: "backup-settings" }[name];
+            if (ownForm) save.setAttribute("form", ownForm); else save.removeAttribute("form");
             document.getElementById("settings-save-label").textContent =
-                "Save " + { garmin: "Garmin", liftosaur: "Liftosaur", zwift: "Zwift" }[name] + " settings";
+                "Save " + { garmin: "Garmin", liftosaur: "Liftosaur", zwift: "Zwift", backup: "backup" }[name] + " settings";
         }
     }
     document.querySelectorAll("[data-tab-button]").forEach(function (b) {
