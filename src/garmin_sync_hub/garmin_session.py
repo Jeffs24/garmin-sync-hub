@@ -1,7 +1,9 @@
 """Shared Garmin Connect session (python-garminconnect): one login for every module."""
 from __future__ import annotations
 
+import base64
 import io
+import json
 import logging
 import threading
 import time
@@ -13,6 +15,22 @@ from typing import Any
 from garminconnect import Garmin
 
 log = logging.getLogger(__name__)
+
+
+EXPIRY_WARNING_DAYS = 7
+
+
+def _jwt_expiry(token: Any) -> datetime | None:
+    """The ``exp`` claim of a JWT, without checking its signature (display only)."""
+    if not isinstance(token, str) or token.count(".") != 2:
+        return None
+    try:
+        payload = token.split(".")[1]
+        data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        exp = float(data["exp"])
+        return datetime.fromtimestamp(exp, timezone.utc)
+    except (ValueError, KeyError, TypeError, OverflowError, OSError):
+        return None
 
 
 class GarminAuthRequired(RuntimeError):
@@ -31,6 +49,64 @@ class GarminSession:
         self._client: Garmin | None = None
         self._pending: tuple[Garmin, Any] | None = None
         self._lock = threading.Lock()
+        # Outcome of the last connection check (see check()).
+        self.last_ok: datetime | None = None
+        self.last_error: str | None = None
+        self.last_error_at: datetime | None = None
+
+    # --- connection health ------------------------------------------------
+
+    def check(self) -> bool:
+        """Make one light API call and remember whether it worked."""
+        now = datetime.now(timezone.utc)
+        if not self.has_tokens():
+            return False
+        try:
+            self.client().get_user_profile()
+        except Exception as e:  # noqa: BLE001 - any failure means the connection is not usable
+            log.warning("Garmin connection check failed: %s", e)
+            self.last_error, self.last_error_at = str(e) or e.__class__.__name__, now
+            self.reset()  # reload the token file next time, in case it was renewed
+            return False
+        self.last_ok = now
+        return True
+
+    def token_expiry(self) -> dict[str, datetime | None]:
+        """Expiry dates read from the stored tokens (None when unknown)."""
+        out: dict[str, datetime | None] = {"access": None, "refresh": None, "saved": None}
+        try:
+            data = json.loads(self.token_file.read_text())
+            out["saved"] = datetime.fromtimestamp(self.token_file.stat().st_mtime, timezone.utc)
+        except (OSError, ValueError):
+            return out
+        if not isinstance(data, dict):
+            return out
+        for key, field in (("access", "di_token"), ("refresh", "di_refresh_token")):
+            out[key] = _jwt_expiry(data.get(field))
+        return out
+
+    def health(self, now: datetime | None = None) -> dict[str, Any]:
+        """Connection state for the UI: state is ok, warning, error or disconnected."""
+        now = now or datetime.now(timezone.utc)
+        h: dict[str, Any] = {"state": "disconnected", "message": "Not connected",
+                             "last_ok": self.last_ok, "last_error": self.last_error,
+                             "last_error_at": self.last_error_at, "refresh_expires": None}
+        if not self.has_tokens():
+            return h
+        expiry = self.token_expiry()
+        h["refresh_expires"] = expiry["refresh"]
+        if self.last_error_at and (not self.last_ok or self.last_error_at > self.last_ok):
+            h.update(state="error", message="Garmin refused the last request. Reconnect Garmin if this persists.")
+        elif expiry["refresh"] and expiry["refresh"] <= now:
+            h.update(state="error", message="The Garmin sign-in has expired. Reconnect Garmin.")
+        elif expiry["refresh"] and expiry["refresh"] - now < timedelta(days=EXPIRY_WARNING_DAYS):
+            days = max(1, (expiry["refresh"] - now).days)
+            h.update(state="warning", message=f"The Garmin sign-in expires in {days} day{'s' if days > 1 else ''}. Reconnect Garmin to renew it.")
+        elif self.last_ok is None:
+            h.update(state="ok", message="Connected (not checked yet)")
+        else:
+            h.update(state="ok", message="Connected")
+        return h
 
     @property
     def token_file(self) -> Path:
@@ -73,11 +149,13 @@ class GarminSession:
         with self._lock:
             self._client = None  # reload from the token store, profile included
         self.client()
+        self.last_ok, self.last_error, self.last_error_at = datetime.now(timezone.utc), None, None
 
     def logout(self) -> None:
         with self._lock:
             self._client = None
         self.token_file.unlink(missing_ok=True)
+        self.last_ok, self.last_error, self.last_error_at = None, None, None
 
     def reset(self) -> None:
         """Forget the loaded client so the token file is read again."""

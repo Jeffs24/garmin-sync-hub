@@ -171,6 +171,14 @@
         .htmx-request .htmx-indicator { display: inline-flex; }
         .htmx-request .htmx-hide { display: none; }
 
+        /* On/off switch and interval picker (auto-sync controls) */
+        .toggle-track { position: relative; width: 44px; height: 24px; background: var(--border); border-radius: 12px; cursor: pointer; transition: background 0.2s; flex-shrink: 0; }
+        .toggle-track.active { background: var(--accent); }
+        .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; background: #fff; border-radius: 50%; transition: transform 0.2s; }
+        .toggle-track.active .toggle-thumb { transform: translateX(20px); }
+        .interval-select { padding: 4px 8px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 12px; font-family: var(--font); min-height: 32px; }
+        .htmx-request.toggle-track, .htmx-request.interval-select { opacity: 0.5; pointer-events: none; }
+
         /* ── Toast ── */
         .toast {
             padding: 12px 20px; border-radius: var(--radius-sm);

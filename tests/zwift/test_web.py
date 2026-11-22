@@ -127,7 +127,21 @@ def test_settings_has_one_tab_per_source(client, monkeypatch):
     assert r.status_code == 200
     for tab in ("garmin", "liftosaur", "zwift"):
         assert f'data-tab-button="{tab}"' in r.text and f'data-tab="{tab}"' in r.text
-    assert "ZWIFT_AUTO_MERGE" in r.text
+    assert 'action="/zwift/settings"' in r.text and 'name="auto_merge"' in r.text
+
+
+def test_settings_never_calls_the_liftosaur_api(client, monkeypatch):
+    c, _ = client
+    from garmin_sync_hub.liftosaur import liftosaur
+
+    def boom(self, *a, **k):
+        raise AssertionError("settings page called the Liftosaur API")
+
+    monkeypatch.setattr(server, "load_config", lambda: {"liftosaur_api_key": "x", "user_profile": {}, "timing": {}})
+    monkeypatch.setattr(server, "_unmapped_cache", None)
+    monkeypatch.setattr(liftosaur.LiftosaurClient, "get_workouts", boom)
+    r = c.get("/settings")
+    assert r.status_code == 200
 
 
 def test_sync_one_reports_a_bad_liftosaur_key_as_json(client, monkeypatch):
@@ -142,3 +156,103 @@ def test_sync_one_reports_a_bad_liftosaur_key_as_json(client, monkeypatch):
     r = c.post("/api/sync-one")
     assert r.status_code == 401
     assert "Liftosaur API key" in r.json()["error"]
+
+
+@pytest.fixture
+def own_cfg(client, monkeypatch, tmp_path):
+    """A private copy of the Zwift config, so settings tests don't leak into others."""
+    import dataclasses
+
+    c, m = client
+    cfg = dataclasses.replace(m.cfg, data_dir=tmp_path, auto_scan=True, auto_merge=False, scan_interval_minutes=30)
+    monkeypatch.setattr(m, "cfg", cfg)
+    monkeypatch.setattr(m.service, "cfg", cfg)
+    return c, m
+
+
+def test_zwift_settings_are_saved_and_applied(own_cfg):
+    from garmin_sync_hub.zwift.config import Config
+
+    c, m = own_cfg
+    r = c.post("/zwift/settings", data={
+        "auto_scan": ["off"], "auto_merge": ["off", "on"], "scan_interval_minutes": "60",
+        "scan_days": "14", "min_overlap": "0.6",
+    }, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/settings?zwift=saved#zwift"
+    assert (m.cfg.auto_scan, m.cfg.auto_merge, m.cfg.scan_interval_minutes, m.cfg.scan_days) == (False, True, 60, 14)
+    assert m.cfg.min_overlap == 0.6
+    assert m.state["next_scan"] is None  # auto-sync is off
+
+    reloaded = Config.from_env()
+    reloaded.data_dir = m.cfg.data_dir
+    import json
+    reloaded.update(json.loads(m.cfg.settings_file.read_text()))
+    assert reloaded.auto_merge is True and reloaded.scan_days == 14
+
+    page = c.get("/settings")
+    assert 'name="scan_days"' in page.text and 'value="14"' in page.text
+
+
+def test_bad_zwift_settings_change_nothing(own_cfg):
+    c, m = own_cfg
+    r = c.post("/zwift/settings", data={"scan_days": "0", "auto_merge": "on"}, follow_redirects=False)
+    assert r.status_code == 303 and "zwift_error=" in r.headers["location"]
+    assert m.cfg.auto_merge is False and m.cfg.scan_days != 0
+    assert "between 1 and 365" in c.get(r.headers["location"]).text
+
+
+def test_zwift_autosync_toggle(own_cfg):
+    c, m = own_cfg
+    page = c.get("/zwift")
+    assert 'id="zw-autosync"' in page.text and "toggle-track active" in page.text
+    r = c.post("/zwift/autosync", data={"enabled": "false", "interval": "120"})
+    assert r.status_code == 200 and "Off" in r.text
+    assert m.cfg.auto_scan is False and m.cfg.scan_interval_minutes == 120
+    r = c.post("/zwift/autosync", data={"enabled": "true", "interval": "120"})
+    assert m.cfg.auto_scan is True and "Next:" in r.text
+
+
+def test_scan_loop_waits_and_wakes_on_settings_change(own_cfg):
+    from datetime import datetime, timedelta, timezone
+
+    _, m = own_cfg
+    m._stop, m._wake = threading.Event(), threading.Event()  # a previous app shutdown set _stop
+    m.cfg.auto_scan = False
+    done = threading.Event()
+    t = threading.Thread(target=lambda: (m._wait_for_next_scan(), done.set()), daemon=True)
+    t.start()
+    assert not done.wait(0.2)  # off: waits for a change
+    m.state["last_scan"] = datetime.now(timezone.utc) - timedelta(hours=1)
+    m.cfg.auto_scan = True
+    m.settings_changed()
+    assert done.wait(2)  # on, and a scan is overdue: returns right away
+
+
+def test_pairs_page_explains_the_merge_with_current_settings(own_cfg):
+    c, m = own_cfg
+    m.cfg.copy_altitude, m.cfg.delete_source = False, True
+    page = c.get("/zwift").text
+    assert "How it works" in page and "<details class=\"card\" open" in page  # open while no pairs
+    assert "not the altitude (off in settings)" in page and "the Zwift copy is deleted" in page
+    m.cfg.copy_altitude, m.cfg.delete_source = True, False
+    m.store.upsert_detected(1, 2, "Run", "Zwift", "2026-11-20T12:00:00+00:00", 0.97)
+    page = c.get("/zwift").text
+    assert "the virtual altitude" in page and "the Zwift copy is kept" in page
+    assert "<details class=\"card\" open" not in page
+
+
+def test_restore_button_only_for_merged_pairs_with_backups(client, monkeypatch):
+    c, m = client
+    m.store.upsert_detected(1, 2, "Run", "Zwift", "2026-11-20T12:00:00+00:00", 0.97)
+    assert "/zwift/pairs/1/restore" not in c.get("/zwift").text
+    assert c.post("/zwift/pairs/1/restore", follow_redirects=False).status_code == 409
+
+    m.store.set_status(1, "merged", "Merged", new_id=101)
+    folder = m.cfg.backup_dir / "1"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "1_watch.fit").write_bytes(b"x")
+    assert "/zwift/pairs/1/restore" in c.get("/zwift").text
+    called = threading.Event()
+    monkeypatch.setattr(m.service, "restore", lambda tid: called.set())
+    r = c.post("/zwift/pairs/1/restore", follow_redirects=False)
+    assert r.status_code == 303 and called.wait(2)

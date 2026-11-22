@@ -6,6 +6,7 @@ import logging
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -13,7 +14,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from ..auth import auth_enabled
 from ..garmin_session import GarminAuthRequired, shared_session
-from .config import Config
+from .config import EDITABLE, SCAN_INTERVALS, Config
 from .preview import summarize
 from .service import Service
 from .store import Store
@@ -32,6 +33,7 @@ STATUS_LABELS = {
     "merged": "Merged",
     "failed": "Failed",
     "ignored": "Ignored",
+    "restored": "Restored",
 }
 
 _PAIR_ACTIONS = ("/scan", "/merge-all")
@@ -75,17 +77,37 @@ def svg_chart(name: str, points: list[tuple[float, float]], invert: bool = False
     )
 
 
+def _when(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    return (f"<time data-local data-time datetime='{value.strftime('%Y-%m-%dT%H:%M:%SZ')}'>"
+            f"{value.strftime('%Y-%m-%d %H:%M')} UTC</time>")
+
+
+def autosync_status(m: "ZwiftModule") -> str:
+    """One line under the auto-sync switch: last and next scan."""
+    if not m.cfg.auto_scan:
+        return "Off: scans run only when you click “Scan now”."
+    parts = []
+    if m.state["last_scan"]:
+        parts.append("Last: " + _when(m.state["last_scan"]))
+    if m.state["next_scan"]:
+        parts.append("Next: " + _when(m.state["next_scan"]))
+    return " · ".join(parts) or f"Every {m.cfg.scan_interval_minutes} min."
+
+
 class ZwiftModule:
     """Everything the Zwift module needs at runtime: service, store, Zwift client, scheduler."""
 
     def __init__(self, cfg: Config | None = None):
-        self.cfg = cfg or Config.from_env()
+        self.cfg = cfg or Config.load()
         self.garmin = shared_session()
         self.store = Store(self.cfg.db_path)
         self.service = Service(self.cfg, self.garmin, self.store)
         self.zwift = ZwiftClient(self.cfg.zwift_token_file)
         self._sync_lock = threading.Lock()
         self._stop = threading.Event()
+        self._wake = threading.Event()
         self.state = {
             "last_error": None,
             "last_scan": None,
@@ -124,20 +146,50 @@ class ZwiftModule:
             except Exception as e:  # noqa: BLE001
                 log.warning("Automatic Zwift login failed: %s", e)
         while not self._stop.is_set():
-            now = datetime.now(timezone.utc)
-            self.state["last_scan"] = now
-            self.state["next_scan"] = now + timedelta(minutes=self.cfg.scan_interval_minutes)
-            if self.garmin.has_tokens():
-                try:
-                    self.service.scan()
-                    if self.zwift.connected() and self.cfg.zwift_auto_sync:
-                        self.zwift_sync(datetime.now(timezone.utc) - timedelta(days=self.cfg.scan_days))
-                    self.service.merge_pending()
-                    self.state["last_error"] = None
-                except Exception as e:  # noqa: BLE001
-                    log.exception("Zwift scan failed")
-                    self.state["last_error"] = str(e)
-            self._stop.wait(self.cfg.scan_interval_minutes * 60)
+            if self.cfg.auto_scan:
+                self.run_scan()
+            self._wait_for_next_scan()
+
+    def run_scan(self) -> None:
+        """One automatic pass: find pairs, fetch new Zwift rides, merge if auto-merge is on."""
+        self.state["last_scan"] = datetime.now(timezone.utc)
+        if not self.garmin.has_tokens():
+            return
+        try:
+            self.service.scan()
+            if self.zwift.connected() and self.cfg.zwift_auto_sync:
+                self.zwift_sync(datetime.now(timezone.utc) - timedelta(days=self.cfg.scan_days))
+            self.service.merge_pending()
+            self.state["last_error"] = None
+        except Exception as e:  # noqa: BLE001
+            log.exception("Zwift scan failed")
+            self.state["last_error"] = str(e)
+
+    def _due(self) -> datetime | None:
+        """When the next automatic scan runs, or None when auto-sync is off."""
+        if not self.cfg.auto_scan:
+            return None
+        last = self.state["last_scan"]
+        if last is None:
+            return datetime.now(timezone.utc)
+        return last + timedelta(minutes=self.cfg.scan_interval_minutes)
+
+    def _wait_for_next_scan(self) -> None:
+        """Sleep until the next scan is due; settings changes wake the loop up."""
+        while not self._stop.is_set():
+            due = self._due()
+            self.state["next_scan"] = due
+            timeout = None if due is None else max(0.0, (due - datetime.now(timezone.utc)).total_seconds())
+            if timeout == 0:
+                return
+            if not self._wake.wait(timeout):
+                return  # time is up
+            self._wake.clear()
+
+    def settings_changed(self) -> None:
+        """Apply new scan settings now instead of after the current wait."""
+        self.state["next_scan"] = self._due()
+        self._wake.set()
 
     def start(self) -> None:
         self._stop.clear()
@@ -145,6 +197,7 @@ class ZwiftModule:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
 
     def _run_bg(self, target_id: int, fn) -> None:
         self.store.set_status(target_id, "running", None)
@@ -166,6 +219,7 @@ class ZwiftModule:
             "failed": sum(1 for r in rows if r["status"] == "failed"),
             "zwift_connected": self.zwift.connected(),
             "auto_merge": self.cfg.auto_merge,
+            "auto_scan": self.cfg.auto_scan,
             "scan_interval_minutes": self.cfg.scan_interval_minutes,
             "last_scan": self.state["last_scan"],
             "next_scan": self.state["next_scan"],
@@ -195,7 +249,8 @@ class ZwiftModule:
                 waiting=sum(1 for r in rows if r["status"] in ("detected", "simulated")),
                 garmin_connected=m.garmin.has_tokens(), zwift_connected=m.zwift.connected(),
                 zs=m.state["zwift"], last_error=m.state["last_error"], upload_results=results,
-                status_labels=STATUS_LABELS,
+                status_labels=STATUS_LABELS, scan_intervals=SCAN_INTERVALS,
+                autosync_status=autosync_status(m),
             )
 
         @router.get("", response_class=HTMLResponse)
@@ -225,6 +280,32 @@ class ZwiftModule:
             if waiting:
                 threading.Thread(target=m.service.merge_all, daemon=True).start()
             return RedirectResponse("/zwift", status_code=303)
+
+        @router.post("/settings")
+        async def save_settings(request: Request) -> RedirectResponse:
+            form = await request.form()
+            # Checkboxes post "off" from a hidden input, then "on" when ticked: keep the last value.
+            values = {name: form.getlist(name)[-1] for name in EDITABLE if form.getlist(name)}
+            try:
+                m.cfg.update(values)
+                m.cfg.save()
+            except (ValueError, OSError) as e:
+                return RedirectResponse("/settings?" + urlencode({"zwift_error": str(e)}) + "#zwift", status_code=303)
+            m.settings_changed()
+            return RedirectResponse("/settings?zwift=saved#zwift", status_code=303)
+
+        @router.post("/autosync", response_class=HTMLResponse)
+        def autosync(enabled: str = Form("false"), interval: str = Form("")) -> HTMLResponse:
+            values: dict = {"auto_scan": enabled}
+            if interval:
+                values["scan_interval_minutes"] = interval
+            try:
+                m.cfg.update(values)
+                m.cfg.save()
+            except (ValueError, OSError) as e:
+                return HTMLResponse(f"<span class='st-failed'>{html.escape(str(e))}</span>")
+            m.settings_changed()
+            return HTMLResponse(autosync_status(m))
 
         @router.post("/upload")
         async def upload(files: list[UploadFile] = File(...)) -> RedirectResponse:
@@ -276,6 +357,10 @@ class ZwiftModule:
                 m._run_bg(target_id, m.service.merge)
             elif action == "ignore":
                 m.service.ignore(target_id)
+            elif action == "restore":
+                if not m.service.can_restore(target_id):
+                    raise HTTPException(409, "Only a merged pair with its backups can be restored")
+                m._run_bg(target_id, m.service.restore)
             else:
                 raise HTTPException(404)
             return RedirectResponse("/zwift", status_code=303)

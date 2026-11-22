@@ -8,6 +8,9 @@
         margin-top: 10px;
         border-top: 1px solid var(--border-subtle);
     }
+    /* Opened from a link to one workout (Activity, Overview): show it clearly. */
+    .workout-card { scroll-margin-top: 80px; }
+    .workout-card:target { opacity: 1 !important; outline: 2px solid var(--src-liftosaur); outline-offset: 2px; }
     .cal-detail summary {
         cursor: pointer;
         font-size: 12px;
@@ -92,6 +95,9 @@
     <p style="font-size: 13px; color: var(--text-secondary); margin-top: 6px;">{{ fetch_error }}. Check your Liftosaur API key in <a href="/settings#liftosaur">Settings</a>.</p>
 </div>
 {% endif %}
+{% if request and request.query_params.get('missing') %}
+<div class="toast toast-error" style="margin-bottom: 16px;">That workout is no longer in your recent Liftosaur history.</div>
+{% endif %}
 <div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start;">
     <div>
         <h2 style="font-size: 18px; font-weight: 700;">Workouts</h2>
@@ -125,7 +131,7 @@
 </div>
 
 {% for w in workouts %}
-<div class="card" style="margin-bottom: 12px; {% if w.status != 'pending' %}opacity: 0.65;{% endif %}">
+<div class="card workout-card" id="{{ w.id|workout_anchor }}" style="margin-bottom: 12px; {% if w.status != 'pending' %}opacity: 0.65;{% endif %}">
     <div style="display: flex; justify-content: space-between; align-items: flex-start;">
         <div style="flex: 1;">
             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">

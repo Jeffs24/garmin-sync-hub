@@ -441,7 +441,7 @@ class TestSettingsSave:
 
         monkeypatch.setattr("garmin_sync_hub.server.load_config", lambda: {"garmin_email": "", "user_profile": {}, "hr_fusion": {}}, raising=False)
         monkeypatch.setattr("garmin_sync_hub.server._has_garmin_tokens", lambda config=None: True, raising=False)
-        monkeypatch.setattr("garmin_sync_hub.server._get_unmapped_exercises", lambda: [], raising=False)
+        monkeypatch.setattr("garmin_sync_hub.server._get_unmapped_exercises", lambda fetch=True: [], raising=False)
 
         response = client.get("/settings")
 

@@ -7,7 +7,7 @@ Garmin Connect automations in one self-hosted app, with one Garmin login:
 
 It runs as one Docker container with a web UI:
 
-- **Overview**: one card per source (Garmin, Liftosaur, Zwift) with its state, what is pending and a quick action, plus the latest activity.
+- **Overview**: one card per source (Garmin, Liftosaur, Zwift) with its state, what is pending and a quick action, plus the latest activity. The Garmin card checks the connection every 30 minutes (or on **Check now**) and warns a week before the Garmin sign-in expires.
 - **Activity**: everything sent to Garmin, from every source, with tabs to filter by source or show only what needs your attention (failures, pairs waiting to be merged).
 - **Liftosaur** and **Zwift**: one section per source, with its own pages.
 - **Settings**: one tab per source.
@@ -52,7 +52,7 @@ For each pair of *watch activity without a map* + *Zwift activity with a map* th
 
 Every Garmin step is checked against the activity list, since Garmin sometimes answers with an error (such as a 504) for a request that went through. If an earlier attempt left the watch activity deleted without a replacement, clicking **Merge** again imports it from the backups.
 
-**Zwift → Pairs** lists the pairs found. **Simulate** builds the merged file without touching Garmin, and **Preview** shows it as Garmin will get it: map, stats and charts.
+**Zwift → Pairs** lists the pairs found. Its **Auto-sync** switch turns the scheduled scan on or off and sets how often it runs; the other Zwift options (merge mode, period scanned, matching thresholds) are in **Settings → Zwift** and apply right away. **Simulate** builds the merged file without touching Garmin, and **Preview** shows it as Garmin will get it: map, stats and charts. **Restore** undoes a merge from the backups: the original watch activity is re-imported first (name, description, type and gear restored), then the merged activity is deleted, and a Zwift copy removed by the merge is brought back. The restored pair stays out of automatic merges. A **How it works** card on the same page shows what the merge takes from each activity, with your current settings.
 
 ### Zwift account and history
 
@@ -64,6 +64,8 @@ Offline merge of two files: `garmin-sync-hub zwift-merge-files watch.fit zwift.f
 
 ## Configuration (`.env`)
 
+The `ZWIFT_*` variables give the starting values; once you save the Zwift settings in the web UI, the saved values win.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `HUB_PASSWORD` | *(empty)* | password for the web UI |
@@ -73,6 +75,7 @@ Offline merge of two files: `garmin-sync-hub zwift-merge-files watch.fit zwift.f
 | `ZWIFT_DELETE_SOURCE` | `true` | delete the Zwift copy on Garmin after merging |
 | `ZWIFT_COPY_ALTITUDE` | `false` | also copy the Zwift virtual altitude |
 | `ZWIFT_SCAN_DAYS` | `7` | period scanned for new pairs |
+| `ZWIFT_AUTO_SCAN` | `true` | scan on a schedule (Auto-sync) |
 | `ZWIFT_SCAN_INTERVAL_MINUTES` | `30` | time between two scans |
 | `ZWIFT_MIN_OVERLAP` | `0.5` | minimum overlap (shared time / combined time) |
 | `ZWIFT_MIN_POSITION_RATIO` | `0.5` | minimum share of watch points that get a position |
@@ -90,6 +93,7 @@ Everything lives in the `data/` volume (`DATA_DIR`):
 |---|---|
 | `garminconnect/garmin_tokens.json` | Garmin tokens |
 | `liftosaur.json` | Liftosaur settings (API key, profile, timing, auto-sync) |
+| `zwift_settings.json` | Zwift settings saved from the web UI |
 | `liftosaur.db` | synced workouts, sync log, custom mappings |
 | `zwift.db` | Zwift pairs and their status |
 | `zwift_tokens.json` | Zwift tokens |

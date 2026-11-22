@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS pairs (
     source_name  TEXT,
     start_utc    TEXT,
     overlap      REAL,
-    status       TEXT NOT NULL,         -- detected | simulated | merged | failed | ignored
+    status       TEXT NOT NULL,         -- detected | simulated | merged | failed | ignored | restored
     message      TEXT,
     new_id       INTEGER,               -- merged activity id on Garmin
     position_ratio REAL,
@@ -68,6 +68,19 @@ class Store:
             )
             return cur.rowcount > 0
 
+    def add_pair(self, target_id: int, source_id: int, target_name: str, source_name: str, start_utc: str,
+                 overlap: float, *, status: str, message: str | None = None,
+                 source_file: str | None = None) -> None:
+        """Insert or replace a pair with a given status (used after a restore)."""
+        with self._lock, self._db:
+            self._db.execute(
+                """INSERT OR REPLACE INTO pairs (target_id, source_id, target_name, source_name, start_utc,
+                                                 overlap, status, message, source_file, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (target_id, source_id, target_name, source_name, start_utc, overlap, status, message,
+                 source_file, _now()),
+            )
+
     def set_status(self, target_id: int, status: str, message: str | None = None,
                    new_id: int | None = None, position_ratio: float | None = None) -> None:
         with self._lock, self._db:
@@ -108,7 +121,7 @@ class Store:
         """Activity ids that must not be paired again (merged, ignored, or produced by us)."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT target_id, source_id, new_id FROM pairs WHERE status IN ('merged', 'ignored')"
+                "SELECT target_id, source_id, new_id FROM pairs WHERE status IN ('merged', 'ignored', 'restored')"
             ).fetchall()
         ids: set[int] = set()
         for r in rows:

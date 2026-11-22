@@ -1,0 +1,52 @@
+{# What the Zwift merge takes from where. Needs `cfg` (Zwift Config), `zwift_connected`, `open`. #}
+<style>
+    .zf { display: grid; grid-template-columns: minmax(0, 1fr) 40px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 14px; }
+    .zf-inputs { display: grid; gap: 6px; }
+    .zf-box { border: 1px solid var(--border); border-left: 3px solid var(--src); border-radius: var(--radius-sm); padding: 10px 12px; background: var(--bg-secondary); font-size: 13px; }
+    .zf-box h4 { margin: 0 0 4px; font-size: 13px; color: var(--src); }
+    .zf-box ul { margin: 4px 0 0 16px; padding: 0; color: var(--text-secondary); line-height: 1.6; }
+    .zf-box .zf-from { color: var(--text-muted); font-size: 12px; }
+    .zf-plus, .zf-arrow { text-align: center; color: var(--text-muted); font-size: 18px; line-height: 1; }
+    .zf-arrow::before { content: "→"; }
+    .zf-steps { margin: 14px 0 0 18px; padding: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.7; }
+    .zf-muted { color: var(--text-muted); }
+    @media (max-width: 640px) {
+        .zf { grid-template-columns: minmax(0, 1fr); }
+        .zf-arrow::before { content: "↓"; }
+    }
+</style>
+<details class="card" {% if open %}open{% endif %}>
+    <summary class="card-title" style="cursor: pointer;">How it works</summary>
+    <div class="zf" role="group" aria-label="What the merge takes from each activity">
+        <div class="zf-inputs">
+            <div class="zf-box src-garmin">
+                <h4>Watch activity <span class="zf-from">on Garmin, no map</span></h4>
+                <div class="zf-muted">Kept exactly as recorded:</div>
+                <ul><li>heart rate, power, cadence, footpod</li><li>laps, time, distance, device</li><li>name, description, type, gear</li></ul>
+            </div>
+            <div class="zf-plus" aria-hidden="true">+</div>
+            <div class="zf-box src-zwift">
+                <h4>Zwift copy <span class="zf-from">same ride or run</span></h4>
+                <div class="zf-muted">Found on Garmin{% if zwift_connected %}, in your Zwift account{% endif %}, or in a FIT file you upload. Gives only:</div>
+                <ul><li>the GPS track (the Zwift map)</li>{% if cfg.copy_altitude %}<li>the virtual altitude</li>{% else %}<li class="zf-muted">not the altitude (off in settings)</li>{% endif %}</ul>
+            </div>
+        </div>
+        <div class="zf-arrow" aria-hidden="true"></div>
+        <div class="zf-box src-garmin">
+            <h4>Merged activity <span class="zf-from">on Garmin</span></h4>
+            <ul>
+                <li>all the watch data, plus the map</li>
+                <li>name, description, type and gear restored</li>
+                <li>replaces the watch activity</li>
+                {% if cfg.delete_source %}<li>the Zwift copy is deleted</li>{% else %}<li class="zf-muted">the Zwift copy is kept (off in settings)</li>{% endif %}
+            </ul>
+        </div>
+    </div>
+    <ol class="zf-steps">
+        <li><b>Pair</b>: {% if cfg.auto_scan %}every {{ cfg.scan_interval_minutes }} min{% else %}when you click Scan now{% endif %}, activities from the last {{ cfg.scan_days }} days are matched when they overlap by at least {{ (cfg.min_overlap * 100)|round|int }}%.
+            Each watch point gets the Zwift position closest in time (within {{ cfg.time_tolerance_s }} s).</li>
+        <li><b>Check</b> (optional): Simulate builds the file without touching Garmin; Preview shows its map and charts.</li>
+        <li><b>Merge</b>: {% if cfg.auto_merge %}automatic for every pair found{% else %}only when you click Merge{% endif %}. The merged file is uploaded first; the old activities are deleted only once it is on Garmin. Backups stay in <code>data/zwift_backups</code>.</li>
+    </ol>
+    <p class="zw-msg"><a href="/settings#zwift">Change these options</a></p>
+</details>

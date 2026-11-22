@@ -43,3 +43,36 @@ def test_sync_records_action_and_failures(tmp_path):
     db.mark_synced("w1", "42", "Legs", action="uploaded")
     assert db.get_failures() == []
     assert db.get_all_synced()[0]["action"] == "uploaded"
+
+
+def test_liftosaur_rows_link_to_their_workout():
+    from garmin_sync_hub.activity import liftosaur_events
+
+    ok, failed = liftosaur_events(
+        [{"workout_id": "abc 1", "title": "Push", "synced_at": "2026-11-20 10:00:00"}],
+        [{"workout_id": "", "title": "Pull", "failed_at": "2026-11-20 11:00:00"}],
+    )
+    assert ok.link == "/liftosaur/workouts/abc%201"
+    assert failed.link == "/liftosaur/workouts"
+
+
+def test_workout_link_opens_the_right_page(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from garmin_sync_hub import db, server
+
+    monkeypatch.setattr(server, "_has_garmin_tokens", lambda config=None: True)
+    monkeypatch.setattr(server, "load_config", lambda: {"liftosaur_api_key": "", "user_profile": {}})
+    _db = db.get_db()
+    _db.set_app_config("workouts_page_1", {"workouts": [{"id": "w1", "title": "A", "exercises": []}], "page_count": 2})
+    _db.set_app_config("workouts_page_2", {"workouts": [{"id": "w2", "title": "B", "exercises": [],
+                                                         "start_time": "2026-11-01T10:00:00Z"}], "page_count": 2})
+    server._is_configured_cache = None
+    with TestClient(server.app) as c:
+        r = c.get("/liftosaur/workouts/w2", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/liftosaur/workouts?page=2#workout-w2"
+        page = c.get("/liftosaur/workouts?page=2").text
+        assert 'id="workout-w2"' in page
+        r = c.get("/liftosaur/workouts/gone", follow_redirects=False)
+        assert r.headers["location"] == "/liftosaur/workouts?missing=1"
+        assert "no longer in your recent Liftosaur history" in c.get(r.headers["location"]).text

@@ -392,6 +392,21 @@ class SQLiteDatabase(Database):
         conn.commit()
         conn.close()
 
+    def find_cached_workout_page(self, workout_id: str) -> int | None:
+        """Page of the Workouts list whose cached copy holds this workout."""
+        conn = self._get_conn()
+        rows = conn.execute("SELECT key, value FROM app_cache WHERE key LIKE 'workouts_page_%'").fetchall()
+        conn.close()
+        for row in rows:
+            try:
+                page = int(row["key"].rsplit("_", 1)[1])
+                workouts = json.loads(row["value"]).get("workouts") or []
+            except (ValueError, AttributeError):
+                continue
+            if any(str(w.get("id")) == str(workout_id) for w in workouts if isinstance(w, dict)):
+                return page
+        return None
+
     def get_custom_mappings(self) -> dict[str, tuple[int, int]]:
         conn = self._get_conn()
         rows = conn.execute(

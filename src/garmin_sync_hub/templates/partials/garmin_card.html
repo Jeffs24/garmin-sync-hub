@@ -1,0 +1,26 @@
+{# Overview card for Garmin Connect. Needs `garmin` (GarminSession.health()). Swapped in place by "Check now". #}
+{% set state_class = {"ok": "state-ok", "warning": "state-pending", "error": "state-failed", "disconnected": "state-pending"}[garmin.state] %}
+<div class="card source-card src-garmin" id="garmin-card">
+    <div class="source-name">Garmin Connect</div>
+    {% if garmin.state == "disconnected" %}
+    <div class="source-main state-pending">Not connected</div>
+    <div class="source-meta">Connect Garmin to sync Liftosaur workouts and add Zwift maps.</div>
+    <div class="source-actions"><a href="/settings#garmin" class="btn btn-primary btn-sm">Connect Garmin</a></div>
+    {% else %}
+    <div class="source-main {{ state_class }}">{% if garmin.state == "ok" %}Connected{% elif garmin.state == "warning" %}Expires soon{% else %}Needs attention{% endif %}</div>
+    <div class="source-meta">
+        {% if garmin.state != "ok" %}<div class="{{ state_class }}">{{ garmin.message }}</div>{% endif %}
+        {% if garmin.state == "error" and garmin.last_error_at %}Check failed <time data-local data-time datetime="{{ garmin.last_error_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ garmin.last_error_at.strftime('%Y-%m-%d %H:%M') }} UTC</time>
+        {%- elif garmin.last_ok %}Last check OK <time data-local data-time datetime="{{ garmin.last_ok.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ garmin.last_ok.strftime('%Y-%m-%d %H:%M') }} UTC</time>
+        {%- else %}Not checked yet{% endif %}
+        {% if garmin.refresh_expires and garmin.state == "ok" %} · sign-in valid until <time data-local datetime="{{ garmin.refresh_expires.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ garmin.refresh_expires.strftime('%Y-%m-%d') }}</time>{% endif %}
+        {% if garmin.state == "error" and garmin.last_error %}<div class="detail" title="{{ garmin.last_error }}" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ garmin.last_error }}</div>{% endif %}
+    </div>
+    <div class="source-actions">
+        <button class="btn btn-secondary btn-sm" hx-post="/api/garmin/check" hx-target="#garmin-card" hx-swap="outerHTML" hx-disabled-elt="this">
+            <span class="htmx-hide">Check now</span><span class="htmx-indicator"><span class="spinner"></span></span>
+        </button>
+        <a href="/settings#garmin" class="btn {% if garmin.state in ('warning', 'error') %}btn-primary{% else %}btn-secondary{% endif %} btn-sm">{% if garmin.state in ('warning', 'error') %}Reconnect{% else %}Manage{% endif %}</a>
+    </div>
+    {% endif %}
+</div>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextvars
+from contextlib import asynccontextmanager
 import logging
 import os
 import re
@@ -17,6 +18,7 @@ from typing import Any
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from jinja2 import Environment, FileSystemLoader
 
 from garmin_sync_hub import activity, db
@@ -57,6 +59,14 @@ def _get_cat_names() -> dict[int, str]:
 _jinja_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True)
 
 
+def _workout_anchor(workout_id: Any) -> str:
+    """HTML id of a workout card, used as the #fragment of links to it."""
+    return "workout-" + re.sub(r"[^A-Za-z0-9_-]", "-", str(workout_id))
+
+
+_jinja_env.filters["workout_anchor"] = _workout_anchor
+
+
 def _render(template_name: str, **ctx) -> HTMLResponse:
     t = _jinja_env.get_template(template_name)
     ctx.setdefault("auth_enabled", auth_enabled())
@@ -73,7 +83,16 @@ def _has_garmin_tokens(config: dict[str, Any] | None = None) -> bool:
         return False
 
 
-app = FastAPI(title="garmin-sync-hub", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    _start_background_jobs()
+    try:
+        yield
+    finally:
+        _stop_background_jobs()
+
+
+app = FastAPI(title="garmin-sync-hub", docs_url=None, redoc_url=None, lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 from garmin_sync_hub.zwift.web import ZwiftModule  # noqa: E402
@@ -121,22 +140,35 @@ def _acquire_sync_lock() -> bool:
     return False
 
 
-def _get_unmapped_exercises() -> list[tuple[str, int]]:
-    """Get unmapped exercises. Uses DB cache (updated during sync)."""
+def _still_unmapped(items: list[tuple[str, int]]) -> list[tuple[str, int]]:
+    """Drop exercises that were mapped since the list was cached."""
+    from garmin_sync_hub.liftosaur.mapper import lookup_exercise
+
+    return [(name, count) for name, count in items if lookup_exercise(name)[0] == 65534]
+
+
+def _get_unmapped_exercises(fetch: bool = True) -> list[tuple[str, int]]:
+    """Get unmapped exercises. Uses DB cache (updated during sync).
+
+    With fetch=False, never calls the Liftosaur API: returns whatever is cached,
+    or an empty list. Pages that only show the list in passing use that.
+    """
     # Try DB cache first (instant)
     try:
         _db = db.get_db()
         cached = _db.get_app_config("unmapped_exercises")
         if cached and isinstance(cached, dict):
-            return sorted(cached.items(), key=lambda x: -x[1])
+            return _still_unmapped(sorted(cached.items(), key=lambda x: -x[1]))
     except Exception:
         pass
 
     # Fallback: in-memory cache (local installs)
     global _unmapped_cache, _unmapped_cache_time
     import time as _t
-    if _unmapped_cache is not None and (_t.time() - _unmapped_cache_time) < 600:
-        return _unmapped_cache
+    if _unmapped_cache is not None and (not fetch or (_t.time() - _unmapped_cache_time) < 600):
+        return _still_unmapped(_unmapped_cache)
+    if not fetch:
+        return []
 
     config = load_config()
     unmapped: dict[str, int] = {}
@@ -286,16 +318,39 @@ def _get_autosync_status() -> dict[str, Any]:
     return status
 
 
-@app.on_event("startup")
-async def _startup_autosync() -> None:
-    """Start auto-sync timer on server startup if enabled."""
+GARMIN_CHECK_MINUTES = 30
+_garmin_check_stop = threading.Event()
+
+
+def _garmin_health_loop() -> None:
+    """Check the Garmin connection now, then every GARMIN_CHECK_MINUTES."""
+    from garmin_sync_hub.garmin_session import shared_session
+
+    while not _garmin_check_stop.is_set():
+        try:
+            shared_session().check()
+        except Exception:  # noqa: BLE001 - never let the loop die
+            logger.exception("Garmin connection check crashed")
+        _garmin_check_stop.wait(GARMIN_CHECK_MINUTES * 60)
+
+
+def _start_background_jobs() -> None:
+    """Start the Zwift scan loop, the Garmin check and, if enabled, the Liftosaur auto-sync timer."""
     zwift_module.start()
+    _garmin_check_stop.clear()
+    threading.Thread(target=_garmin_health_loop, name="garmin-check", daemon=True).start()
     config = load_config()
     auto_cfg = config.get("auto_sync", {})
     if auto_cfg.get("enabled", False):
         interval = auto_cfg.get("interval_minutes", 30)
         logger.info("Auto-sync enabled on startup: every %d min", interval)
         _schedule_autosync(interval)
+
+
+def _stop_background_jobs() -> None:
+    _garmin_check_stop.set()
+    zwift_module.stop()
+    _stop_autosync()
 
 
 _is_configured_cache: bool | None = None
@@ -436,6 +491,7 @@ async def overview(request: Request, feed: str = "all"):
     return _render(
         "overview.html",
         garmin_connected=_has_garmin_tokens(config),
+        garmin=_garmin_health(),
         lift=_liftosaur_summary(config),
         zwift=zwift_module.summary(),
         feed=feed,
@@ -443,6 +499,21 @@ async def overview(request: Request, feed: str = "all"):
         feed_counts=activity.counts(events),
         request=request,
     )
+
+
+def _garmin_health() -> dict[str, Any]:
+    from garmin_sync_hub.garmin_session import shared_session
+
+    return shared_session().health()
+
+
+@app.post("/api/garmin/check", response_class=HTMLResponse)
+async def api_garmin_check():
+    """Check the Garmin connection now; returns the Overview's Garmin card."""
+    from garmin_sync_hub.garmin_session import shared_session
+
+    await run_in_threadpool(shared_session().check)
+    return _render("partials/garmin_card.html", garmin=_garmin_health())
 
 
 ACTIVITY_PAGE_SIZE = 50
@@ -814,6 +885,49 @@ async def sync_page(request: Request):
     return RedirectResponse("/")
 
 
+WORKOUT_LOOKUP_MAX_PAGES = 20
+
+
+def _find_workout_page(workout_id: str) -> int | None:
+    """Page of the Workouts list showing this workout: cache first, then the Liftosaur API."""
+    _db = db.get_db()
+    if hasattr(_db, "find_cached_workout_page"):
+        page = _db.find_cached_workout_page(workout_id)
+        if page:
+            return page
+    from garmin_sync_hub.liftosaur.liftosaur import LiftosaurClient
+
+    api_key = load_config().get("liftosaur_api_key")
+    if not api_key:
+        return None
+    client = LiftosaurClient(api_key=api_key)
+    for page in range(1, WORKOUT_LOOKUP_MAX_PAGES + 1):
+        cache_key = f"workouts_page_{page}"
+        cached = _db.get_app_config(cache_key)
+        if not cached:
+            cached = client.get_workouts(page=page, page_size=10)
+            cached = {"workouts": cached.get("workouts", []), "page_count": cached.get("page_count", 1)}
+            _db.set_app_config(cache_key, cached)
+        if any(str(w.get("id")) == str(workout_id) for w in cached.get("workouts", [])):
+            return page
+        if page >= (cached.get("page_count") or 1):
+            return None
+    return None
+
+
+@app.get("/liftosaur/workouts/{workout_id}")
+async def workout_page(workout_id: str):
+    """Open the Workouts list on the page of this workout, scrolled to it."""
+    try:
+        page = await run_in_threadpool(_find_workout_page, workout_id)
+    except Exception as e:  # noqa: BLE001 - fall back to the list
+        logger.warning("Could not locate workout %s: %s", workout_id, e)
+        page = None
+    if page is None:
+        return RedirectResponse("/liftosaur/workouts?missing=1", status_code=303)
+    return RedirectResponse(f"/liftosaur/workouts?page={page}#{_workout_anchor(workout_id)}", status_code=303)
+
+
 @app.get("/liftosaur/mappings", response_class=HTMLResponse)
 async def mappings_page(request: Request):
     from garmin_sync_hub.liftosaur.mapper import EXERCISE_TO_GARMIN, _custom_mappings, _ensure_custom_loaded
@@ -830,8 +944,9 @@ async def mappings_page(request: Request):
         cat_name = CAT_NAMES.get(cat, f"Category {cat}")
         mappings.append((name, cat, subcat, f"{cat_name} (custom)"))
 
-    # Find unmapped exercises from recent workouts (cached)
-    unmapped = _get_unmapped_exercises()
+    # Find unmapped exercises from recent workouts (cached). A cache miss calls
+    # the Liftosaur API, so keep it off the event loop.
+    unmapped = await run_in_threadpool(_get_unmapped_exercises)
 
     custom_list = [(name, cat, subcat, CAT_NAMES.get(cat, f"Category {cat}"))
                    for name, (cat, subcat) in sorted(_custom_mappings.items())]
@@ -851,8 +966,8 @@ async def settings_page(request: Request):
     config = load_config()
     unmapped: dict[str, int] = {}
     try:
-        # Use cached unmapped from DB (no Liftosaur API call)
-        for name, count in _get_unmapped_exercises():
+        # Cached list only: calling the Liftosaur API here made the page slow.
+        for name, count in _get_unmapped_exercises(fetch=False):
             unmapped[name] = count
     except Exception:
         pass
@@ -860,6 +975,8 @@ async def settings_page(request: Request):
         "settings.html",
         config=config,
         zwift_cfg=zwift_module.cfg,
+        zwift_saved=request.query_params.get("zwift") == "saved",
+        zwift_error=request.query_params.get("zwift_error"),
         unmapped=sorted(unmapped.items(), key=lambda x: -x[1]),
         garmin_connected=_has_garmin_tokens(config),
         is_cloud=False,

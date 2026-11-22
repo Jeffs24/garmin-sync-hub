@@ -187,3 +187,41 @@ def test_uploaded_non_zwift_file_is_refused(tmp_path):
     svc, g, store = make(tmp_path)
     assert "not a Zwift file" in svc.add_source_file("watch.fit", g.files[1])
     assert store.all() == []
+
+
+def test_restore_brings_back_the_original_and_removes_the_merged(tmp_path):
+    svc, g, store = make(tmp_path)
+    svc.scan()
+    assert svc.merge(1) == 101 and g.alive == {101}
+    assert svc.can_restore(1)
+
+    restored = svc.restore(1)
+    assert restored == 102
+    assert g.imported[1] == g.files[1]  # the untouched watch file, no map
+    assert 101 in g.deleted and 101 not in g.alive
+    assert g.imported[2] == g.files[2] and 103 in g.alive  # Zwift copy deleted by the merge, back again
+    aid, kw = g.restored[1]
+    assert aid == 102 and kw["name"] == "Treadmill" and kw["gear"] == ["shoe-uuid"]
+
+    row = store.get(1)
+    assert row["status"] == "restored" and "activity 102" in row["message"]
+    new_row = store.get(102)
+    assert new_row["status"] == "ignored" and new_row["source_id"] == 103
+    assert {102, 103} <= store.handled_ids()  # not merged again automatically
+    assert not svc.can_restore(1)
+
+
+def test_restore_that_cannot_import_deletes_nothing(tmp_path):
+    svc, g, store = make(tmp_path)
+    svc.scan()
+    svc.merge(1)
+
+    def refuse(path, start, exclude):
+        raise RuntimeError("500 Server Error")
+
+    g.import_fit = refuse
+    assert svc.restore(1) is None
+    assert g.alive == {101}
+    row = store.get(1)
+    assert row["status"] == "merged" and "Nothing was deleted" in row["message"]
+    assert svc.can_restore(1)

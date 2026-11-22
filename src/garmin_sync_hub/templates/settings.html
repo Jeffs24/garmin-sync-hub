@@ -109,23 +109,67 @@
         </div>
         <div class="form-hint" style="line-height: 1.7; margin-bottom: 12px;">
             Connect the Zwift account from <a href="/zwift/account">Zwift → Account and files</a>.
-            These options are set with <code>ZWIFT_*</code> environment variables in <code>.env</code> (see the README) and need a restart to change.
+            Changes apply right away. The <code>ZWIFT_*</code> variables in <code>.env</code> only give the starting values.
         </div>
+        {% if zwift_saved %}<div class="toast toast-success" style="margin-bottom: 12px;">Zwift settings saved.</div>{% endif %}
+        {% if zwift_error %}<div class="toast toast-error" style="margin-bottom: 12px;">{{ zwift_error }}</div>{% endif %}
         {% if zwift_cfg %}
-        <table style="font-size: 13px;">
-            <tbody>
-            {% for label, var, value in [
-                ("Merge", "ZWIFT_AUTO_MERGE", "automatic" if zwift_cfg.auto_merge else "when you click Merge"),
-                ("Delete the Zwift copy after merging", "ZWIFT_DELETE_SOURCE", "yes" if zwift_cfg.delete_source else "no"),
-                ("Copy the Zwift altitude", "ZWIFT_COPY_ALTITUDE", "yes" if zwift_cfg.copy_altitude else "no"),
-                ("Scan", "ZWIFT_SCAN_INTERVAL_MINUTES", "every " ~ zwift_cfg.scan_interval_minutes ~ " min"),
-                ("Period scanned", "ZWIFT_SCAN_DAYS", zwift_cfg.scan_days ~ " days"),
-                ("Fetch new Zwift activities", "ZWIFT_AUTO_SYNC", "yes" if zwift_cfg.zwift_auto_sync else "no"),
-            ] %}
-            <tr><td style="padding: 8px 0;">{{ label }}</td><td style="padding: 8px 0;"><strong>{{ value }}</strong></td><td style="padding: 8px 0; color: var(--text-muted);"><code>{{ var }}</code></td></tr>
-            {% endfor %}
-            </tbody>
-        </table>
+        {% macro zw_check(name, label, hint) -%}
+        <div class="form-group">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="hidden" name="{{ name }}" value="off" form="zwift-settings">
+                <input type="checkbox" name="{{ name }}" value="on" form="zwift-settings" {{ 'checked' if zwift_cfg[name] }} style="width: 18px; height: 18px; accent-color: var(--accent);">
+                <span style="font-size: 14px;">{{ label }}</span>
+            </label>
+            <div class="form-hint">{{ hint }}</div>
+        </div>
+        {%- endmacro %}
+        {{ zw_check("auto_scan", "Auto-sync", "Scan Garmin on a schedule for watch activities that have a matching Zwift copy.") }}
+        <div class="form-grid">
+            <div class="form-group">
+                <label class="form-label" for="zw_scan_interval">Scan every</label>
+                <select class="form-select" id="zw_scan_interval" name="scan_interval_minutes" form="zwift-settings">
+                    {% for minutes in (15, 30, 60, 120, 240, 360, 720, 1440) %}
+                    <option value="{{ minutes }}" {{ 'selected' if zwift_cfg.scan_interval_minutes == minutes }}>{% if minutes < 60 %}{{ minutes }} min{% elif minutes == 60 %}1 hour{% else %}{{ minutes // 60 }} hours{% endif %}</option>
+                    {% endfor %}
+                    {% if zwift_cfg.scan_interval_minutes not in (15, 30, 60, 120, 240, 360, 720, 1440) %}<option value="{{ zwift_cfg.scan_interval_minutes }}" selected>{{ zwift_cfg.scan_interval_minutes }} min</option>{% endif %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="zw_scan_days">Period scanned (days)</label>
+                <input class="form-input" type="number" id="zw_scan_days" name="scan_days" min="1" max="365" value="{{ zwift_cfg.scan_days }}" form="zwift-settings">
+            </div>
+        </div>
+        {{ zw_check("zwift_auto_sync", "Fetch new Zwift activities at each scan", "Needs the Zwift account to be connected.") }}
+        {{ zw_check("auto_merge", "Merge automatically", "Merge every detected pair without a click. Off: nothing changes on Garmin until you click Merge.") }}
+        {{ zw_check("delete_source", "Delete the Zwift copy after merging", "Removes the separate Zwift activity from Garmin once the merged one is uploaded.") }}
+        {{ zw_check("copy_altitude", "Copy the Zwift altitude", "Also copy Zwift's virtual altitude into the watch activity.") }}
+        <details class="advanced-section">
+            <summary>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                Advanced matching
+            </summary>
+            <div class="advanced-content">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label class="form-label" for="zw_min_overlap">Minimum overlap (0–1)</label>
+                        <input class="form-input" type="number" id="zw_min_overlap" name="min_overlap" min="0.01" max="1" step="0.01" value="{{ zwift_cfg.min_overlap }}" form="zwift-settings">
+                        <div class="form-hint">Shared time divided by combined time.</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="zw_min_position_ratio">Minimum positioned points (0–1)</label>
+                        <input class="form-input" type="number" id="zw_min_position_ratio" name="min_position_ratio" min="0.01" max="1" step="0.01" value="{{ zwift_cfg.min_position_ratio }}" form="zwift-settings">
+                        <div class="form-hint">Share of watch points that must get a position.</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="zw_time_tolerance_s">Time tolerance (seconds)</label>
+                        <input class="form-input" type="number" id="zw_time_tolerance_s" name="time_tolerance_s" min="0" max="60" value="{{ zwift_cfg.time_tolerance_s }}" form="zwift-settings">
+                        <div class="form-hint">Maximum gap between a watch point and a Zwift point.</div>
+                    </div>
+                </div>
+            </div>
+        </details>
+        <button type="submit" class="btn btn-primary" form="zwift-settings" style="margin-top: 16px;">Save Zwift settings</button>
         {% endif %}
     </div>
 
@@ -278,6 +322,8 @@
         Save Settings
     </button>
 </form>
+{# The Zwift tab's fields sit inside the form above but belong to this one (form="zwift-settings"). #}
+<form id="zwift-settings" method="post" action="/zwift/settings"></form>
 
 {% if unmapped %}
 <div class="card" style="margin-top: 28px;" data-tab="liftosaur">
@@ -310,8 +356,8 @@
         });
         if (form) {
             form.action = "/settings#" + name;
-            // Zwift options come from .env: nothing to save on that tab.
-            const save = form.querySelector('button[type="submit"]');
+            // The Zwift tab has its own Save button and form.
+            const save = form.querySelector('button[type="submit"]:not([form])');
             if (save) save.hidden = name === "zwift";
         }
     }

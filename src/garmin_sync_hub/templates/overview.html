@@ -10,18 +10,7 @@
 
 <div class="source-grid">
     {# Garmin: the destination of every sync #}
-    <div class="card source-card src-garmin">
-        <div class="source-name">Garmin Connect</div>
-        {% if garmin_connected %}
-        <div class="source-main state-ok">Connected</div>
-        <div class="source-meta">Every sync writes to this account.</div>
-        <div class="source-actions"><a href="/settings#garmin" class="btn btn-secondary btn-sm">Manage</a></div>
-        {% else %}
-        <div class="source-main state-pending">Not connected</div>
-        <div class="source-meta">Connect Garmin to sync Liftosaur workouts and add Zwift maps.</div>
-        <div class="source-actions"><a href="/settings#garmin" class="btn btn-primary btn-sm">Connect Garmin</a></div>
-        {% endif %}
-    </div>
+    {% include "partials/garmin_card.html" %}
 
     {# Liftosaur #}
     <div class="card source-card src-liftosaur">

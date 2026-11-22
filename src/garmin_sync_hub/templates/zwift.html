@@ -29,7 +29,7 @@
     <div class="zw-row" style="justify-content: space-between;">
         <div>
             Mode {% if cfg.auto_merge %}<b>automatic</b>: every detected pair is merged{% else %}<b>manual</b>: nothing changes until you click “Merge”{% endif %}.
-            Scans every {{ cfg.scan_interval_minutes }} min over the last {{ cfg.scan_days }} days.
+            Scans cover the last {{ cfg.scan_days }} days. <a href="/settings#zwift">Change</a>
         </div>
         <div class="zw-actions">
             <form method="post" action="/zwift/scan"><button class="btn btn-secondary btn-sm">Scan now</button></form>
@@ -41,6 +41,33 @@
         </div>
     </div>
     {% if last_error %}<p class="st-failed zw-msg">Last error: {{ last_error }}</p>{% endif %}
+
+    {% set zw_vals = 'js:{"enabled": document.getElementById("zw-autosync").classList.contains("active"), "interval": document.getElementById("zw-interval").value}' %}
+    <div class="zw-row" style="justify-content: space-between; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--border-subtle);">
+        <div class="zw-row" style="gap: 10px;">
+            <div id="zw-autosync" class="toggle-track {% if cfg.auto_scan %}active{% endif %}"
+                 hx-post="/zwift/autosync" hx-target="#zw-autosync-status" hx-swap="innerHTML"
+                 hx-vals='{{ zw_vals }}' hx-disabled-elt="this, #zw-interval"
+                 onclick="this.classList.toggle('active'); this.setAttribute('aria-checked', this.classList.contains('active'))"
+                 role="switch" tabindex="0" aria-checked="{{ 'true' if cfg.auto_scan else 'false' }}" aria-label="Zwift auto-sync">
+                <div class="toggle-thumb"></div>
+            </div>
+            <span style="font-size: 13px; color: var(--text-secondary);">Auto-sync
+                <span style="color: var(--text-muted); font-size: 11px;">(scan{% if cfg.zwift_auto_sync and zwift_connected %}, fetch from Zwift{% endif %}{% if cfg.auto_merge %}, merge{% endif %})</span></span>
+        </div>
+        <div class="zw-row" style="gap: 6px;">
+            <label for="zw-interval" style="font-size: 12px; color: var(--text-muted);">Every</label>
+            <select id="zw-interval" class="interval-select"
+                    hx-post="/zwift/autosync" hx-target="#zw-autosync-status" hx-swap="innerHTML"
+                    hx-vals='{{ zw_vals }}' hx-disabled-elt="this, #zw-autosync" hx-trigger="change">
+                {% for minutes in scan_intervals %}
+                <option value="{{ minutes }}" {{ 'selected' if cfg.scan_interval_minutes == minutes }}>{% if minutes < 60 %}{{ minutes }} min{% elif minutes == 60 %}1 hour{% else %}{{ minutes // 60 }} hours{% endif %}</option>
+                {% endfor %}
+                {% if cfg.scan_interval_minutes not in scan_intervals %}<option value="{{ cfg.scan_interval_minutes }}" selected>{{ cfg.scan_interval_minutes }} min</option>{% endif %}
+            </select>
+        </div>
+    </div>
+    <div id="zw-autosync-status" class="zw-msg">{{ autosync_status|safe }}</div>
 </div>
 
 {% endif %}
@@ -52,7 +79,7 @@
         <form method="post" action="/zwift/logout"><button class="btn btn-secondary btn-sm">Disconnect Zwift</button></form>
     </div>
     <p class="zw-msg">
-        {% if cfg.zwift_auto_sync %}New Zwift activities are fetched at each scan ({{ cfg.scan_days }} days).{% else %}Automatic fetch is off (ZWIFT_AUTO_SYNC=false).{% endif %}
+        {% if cfg.zwift_auto_sync %}New Zwift activities are fetched at each scan ({{ cfg.scan_days }} days).{% else %}Automatic fetch is off (<a href="/settings#zwift">Settings → Zwift</a>).{% endif %}
         To catch up on older activities, sync the history from a date. Only Zwift activities that overlap a watch activity
         without a map are downloaded; the others are skipped. Pairs found show up below: nothing changes on Garmin until you merge them.
     </p>
@@ -114,14 +141,17 @@
                 </td>
                 <td>
                     <div class="zw-actions">
-                    {% if r.status in ('detected', 'simulated', 'failed') %}
+                    {% if r.status in ('detected', 'simulated', 'failed', 'ignored') %}
                         <form method="post" action="/zwift/pairs/{{ r.target_id }}/simulate"><button class="btn btn-secondary btn-sm">Simulate</button></form>
                         <form method="post" action="/zwift/pairs/{{ r.target_id }}/merge" onsubmit="return confirm('Replace the watch activity on Garmin with the merged one?')"><button class="btn btn-primary btn-sm">Merge</button></form>
-                        <form method="post" action="/zwift/pairs/{{ r.target_id }}/ignore"><button class="btn btn-secondary btn-sm">Ignore</button></form>
+                        {% if r.status != 'ignored' %}<form method="post" action="/zwift/pairs/{{ r.target_id }}/ignore"><button class="btn btn-secondary btn-sm">Ignore</button></form>{% endif %}
                     {% endif %}
                     {% if r.status in ('simulated', 'merged') %}
                         <a class="btn btn-secondary btn-sm" href="/zwift/pairs/{{ r.target_id }}/preview">Preview</a>
                         <a class="btn btn-secondary btn-sm" href="/zwift/pairs/{{ r.target_id }}/merged.fit">FIT</a>
+                    {% endif %}
+                    {% if r.status == 'merged' and r.new_id %}
+                        <form method="post" action="/zwift/pairs/{{ r.target_id }}/restore" onsubmit="return confirm('Bring back the original watch activity (without the map) and delete the merged one on Garmin?')"><button class="btn btn-secondary btn-sm" title="Undo the merge from the backups">Restore</button></form>
                     {% endif %}
                     </div>
                 </td>
@@ -133,5 +163,6 @@
 {% else %}
 <div class="card"><p class="zw-msg">No watch + Zwift pair found yet. Connect your Zwift account or upload Zwift FIT files in <a href="/zwift/account">Account and files</a>.</p></div>
 {% endif %}
+{% with open = not rows %}{% include "partials/zwift_flow.html" %}{% endwith %}
 {% endif %}
 {% endblock %}

@@ -390,6 +390,102 @@ class Service:
             log.info("Merged %s + %s -> %s", target_id, prep.source_id, new_id)
             return new_id
 
+    def can_restore(self, target_id: int) -> bool:
+        row = self.store.get(target_id)
+        return bool(row and row["status"] == "merged" and row["new_id"]
+                    and (self.cfg.backup_dir / str(target_id) / f"{target_id}_watch.fit").exists())
+
+    def restore(self, target_id: int) -> int | None:
+        """Undo a merge: bring back the original watch activity, then delete the merged one.
+
+        Same rule as merge(): the original is imported before anything is
+        deleted. If Garmin refuses it as a duplicate of the merged activity,
+        the merged one is deleted first and re-imported if the original still
+        fails. A Zwift copy deleted by the merge is re-imported too.
+        """
+        with self._lock:
+            row = self.store.get(target_id)
+            if not row or not row["new_id"]:
+                return None
+            folder = self.cfg.backup_dir / str(target_id)
+            watch = folder / f"{target_id}_watch.fit"
+            merged_id = int(row["new_id"])
+            start = datetime.fromisoformat(row["start_utc"])
+
+            def fail(message: str) -> None:
+                self.store.set_status(target_id, "merged", f"Restore failed: {message}")
+
+            if not watch.exists():
+                fail(f"no backup of the watch activity in {folder}.")
+                return None
+            meta_path = folder / "metadata.json"
+            meta = json.loads(meta_path.read_text()) if meta_path.exists() else \
+                {"name": row["target_name"], "description": None, "type_dto": None, "gear": []}
+            exclude = {target_id, merged_id, row["source_id"]}
+
+            merged_deleted = False
+            try:
+                restored = self.garmin.import_fit(watch, start, exclude)
+            except DuplicateActivity:
+                # Garmin wants the merged activity gone before it takes the original back.
+                try:
+                    self.garmin.delete(merged_id, start)
+                except Exception as e:  # noqa: BLE001
+                    fail(f"Garmin saw the original as a duplicate, and deleting the merged activity failed: {e}. Nothing changed.")
+                    return None
+                merged_deleted = True
+                try:
+                    restored = self.garmin.import_fit(watch, start, exclude)
+                except Exception as e:  # noqa: BLE001
+                    log.exception("Re-import of the original failed for %s", target_id)
+                    msg = f"import of the original failed: {e}. "
+                    try:
+                        back = self.garmin.import_fit(folder / f"{target_id}_merged.fit", start, exclude)
+                        self.garmin.restore(back, **meta)
+                        self.store.set_status(target_id, "merged", "Restore failed: " + msg +
+                                              f"The merged activity was re-imported (id {back}).", new_id=back)
+                    except Exception as e2:  # noqa: BLE001
+                        fail(msg + f"Re-importing the merged activity also failed ({e2}). Backups: {folder}.")
+                    return None
+            except Exception as e:  # noqa: BLE001
+                log.exception("Import of the original failed for %s", target_id)
+                fail(f"import of the original failed: {e}. Nothing was deleted.")
+                return None
+
+            notes = []
+            failed = self.garmin.restore(restored, **meta)
+            if failed:
+                notes.append("Redo by hand: " + ", ".join(failed) + ".")
+            if not merged_deleted:
+                try:
+                    self.garmin.delete(merged_id, start)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Could not delete merged activity %s: %s", merged_id, e)
+                    notes.append(f"Delete by hand on Garmin: activity {merged_id}.")
+
+            source_id = row["source_id"]
+            zwift_fit = folder / f"{source_id}_zwift.fit"
+            if source_id and not row["source_file"] and zwift_fit.exists():
+                try:
+                    if not self.garmin.exists(source_id, start):
+                        source_id = self.garmin.import_fit(zwift_fit, start, exclude | {restored})
+                        self.garmin.restore(source_id, name=row["source_name"], description=None,
+                                            type_dto=None, gear=[])
+                        notes.append("The Zwift copy was re-imported.")
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Could not bring back the Zwift copy of %s: %s", target_id, e)
+                    notes.append(f"The Zwift copy was not re-imported ({e}).")
+
+            self.store.set_status(target_id, "restored",
+                                  " ".join([f"Original restored as activity {restored}; merged activity removed."] + notes))
+            # Keep the restored activity out of automatic merges; it can still be merged from the list.
+            self.store.add_pair(restored, source_id or 0, row["target_name"], row["source_name"], row["start_utc"],
+                                row["overlap"] or 0.0, status="ignored",
+                                message="Restored from an earlier merge. Merge it again from here if you want.",
+                                source_file=row["source_file"])
+            log.info("Restored %s as %s (merged %s removed)", target_id, restored, merged_id)
+            return restored
+
     def merge_all(self) -> int:
         """Merge every pair waiting in the list, one after the other."""
         done = 0

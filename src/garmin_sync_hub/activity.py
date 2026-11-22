@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
+from urllib.parse import quote
 
 SOURCES = {
     "liftosaur": "Liftosaur → Garmin",
@@ -76,6 +77,13 @@ _LIFTOSAUR_RESULTS = {
 }
 
 
+def _workout_link(workout_id) -> str:
+    """Page of one Liftosaur workout (it redirects to the right page of the list)."""
+    if not workout_id:
+        return "/liftosaur/workouts"
+    return f"/liftosaur/workouts/{quote(str(workout_id), safe='')}"
+
+
 def liftosaur_events(synced: Iterable[dict], failures: Iterable[dict]) -> list[Event]:
     events = []
     for row in synced:
@@ -90,7 +98,7 @@ def liftosaur_events(synced: Iterable[dict], failures: Iterable[dict]) -> list[E
                 f"avg {row['avg_hr']} bpm" if row.get("avg_hr") else "",
             ) if p),
             garmin_id=row.get("garmin_activity_id"),
-            link="/liftosaur/workouts",
+            link=_workout_link(row.get("workout_id")),
         ))
     for row in failures:
         events.append(Event(
@@ -100,7 +108,7 @@ def liftosaur_events(synced: Iterable[dict], failures: Iterable[dict]) -> list[E
             result="Failed",
             state="failed",
             detail=row.get("error") or "",
-            link="/liftosaur/workouts",
+            link=_workout_link(row.get("workout_id")),
         ))
     return events
 
@@ -116,6 +124,7 @@ _ZWIFT_STATES = {
     "queued": ("Queued", "pending"),
     "running": ("Running…", "pending"),
     "ignored": ("Ignored", "muted"),
+    "restored": ("Original restored", "ok"),
 }
 
 
