@@ -140,11 +140,6 @@ class ZwiftModule:
             self._sync_lock.release()
 
     def _loop(self) -> None:
-        if not self.zwift.connected() and self.cfg.zwift_email and self.cfg.zwift_password:
-            try:
-                self.zwift.login(self.cfg.zwift_email, self.cfg.zwift_password)
-            except Exception as e:  # noqa: BLE001
-                log.warning("Automatic Zwift login failed: %s", e)
         while not self._stop.is_set():
             if self.cfg.auto_scan:
                 self.run_scan()

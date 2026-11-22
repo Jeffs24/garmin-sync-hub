@@ -444,7 +444,7 @@ def sync(
     cfg = config or load_config()
     liftosaur_api_key = overrides.get("liftosaur_api_key") or cfg.get("liftosaur_api_key")
     garmin_email = overrides.get("garmin_email") or cfg.get("garmin_email")
-    garmin_password = overrides.get("garmin_password") or cfg.get("garmin_password", "")
+    garmin_password = overrides.get("garmin_password") or ""  # CLI only: the web UI keeps tokens
     skip_existing = cfg.get("sync", {}).get("skip_existing", True)
     update_existing, match_window = get_update_existing(cfg)
 

@@ -73,7 +73,7 @@ class FakeGarmin:
 
 
 def make(tmp_path, **garmin_kw):
-    cfg = Config.from_env()
+    cfg = Config.defaults()
     cfg.data_dir = tmp_path
     g = FakeGarmin(**garmin_kw)
     store = Store(cfg.db_path)

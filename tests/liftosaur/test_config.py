@@ -73,8 +73,19 @@ class TestLoadConfig:
             config = load_config()
 
         assert config["liftosaur_api_key"] == "dotenv-key"
-        assert config["garmin_email"] == "dotenv@example.com"
-        assert config["garmin_password"] == "dotenv-password"
+        # Garmin is connected in the web UI: credentials from .env are ignored, never kept.
+        assert config["garmin_email"] == ""
+        assert "garmin_password" not in config
+
+    def test_removes_a_garmin_password_saved_by_old_versions(self, tmp_path: Path) -> None:
+        import json
+
+        config_file = tmp_path / "liftosaur.json"
+        config_file.write_text(json.dumps({"garmin_email": "a@b.c", "garmin_password": "secret"}))
+        with patch("garmin_sync_hub.config.CONFIG_FILE", config_file),              patch("garmin_sync_hub.config.CONFIG_DIR", tmp_path):
+            config = load_config()
+        assert "garmin_password" not in config and config["garmin_email"] == "a@b.c"
+        assert "secret" not in config_file.read_text()
 
     def test_exported_env_keeps_precedence_over_dotenv(self, tmp_path: Path, monkeypatch) -> None:
         config_file = tmp_path / "missing.json"

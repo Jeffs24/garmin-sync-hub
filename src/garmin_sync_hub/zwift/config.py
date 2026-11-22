@@ -1,14 +1,15 @@
 """Zwift module settings.
 
-Environment variables give the defaults; values saved from the Settings page
-(data/zwift_settings.json) take precedence.
+The defaults are below; the Settings page saves changes in data/zwift_settings.json.
+Before 1.2.0 the defaults could come from ZWIFT_* environment variables: when no
+settings file exists yet, those are imported into it once (see LEGACY_ENV).
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..paths import data_dir
@@ -32,30 +33,37 @@ EDITABLE: dict[str, type] = {
 }
 
 
-def _bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None or value == "":
-        return default
-    return value.strip().lower() in ("1", "true", "yes", "on", "oui")
+# .env names of the editable settings before 1.2.0, imported once into the settings file.
+LEGACY_ENV: dict[str, str] = {
+    "auto_scan": "ZWIFT_AUTO_SCAN",
+    "scan_interval_minutes": "ZWIFT_SCAN_INTERVAL_MINUTES",
+    "scan_days": "ZWIFT_SCAN_DAYS",
+    "zwift_auto_sync": "ZWIFT_AUTO_SYNC",
+    "auto_merge": "ZWIFT_AUTO_MERGE",
+    "delete_source": "ZWIFT_DELETE_SOURCE",
+    "copy_altitude": "ZWIFT_COPY_ALTITUDE",
+    "min_overlap": "ZWIFT_MIN_OVERLAP",
+    "min_position_ratio": "ZWIFT_MIN_POSITION_RATIO",
+    "time_tolerance_s": "ZWIFT_TIME_TOLERANCE_S",
+}
 
 
 @dataclass
 class Config:
     data_dir: Path
-    scan_days: int
-    scan_interval_minutes: int
-    auto_merge: bool
-    delete_source: bool
-    copy_altitude: bool
-    min_overlap: float
-    min_position_ratio: float
-    time_tolerance_s: int
-    source_names: list[str]
-    source_manufacturers: list[int]
-    zwift_email: str | None = None
-    zwift_password: str | None = None
+    scan_days: int = 7
+    scan_interval_minutes: int = 30
+    auto_merge: bool = False
+    delete_source: bool = True
+    copy_altitude: bool = False
+    min_overlap: float = 0.5
+    min_position_ratio: float = 0.5
+    time_tolerance_s: int = 2
     zwift_auto_sync: bool = True
     auto_scan: bool = True
+    # How a Zwift copy is recognized: its device name, and its FIT manufacturer (260 = Zwift).
+    source_names: list[str] = field(default_factory=lambda: ["zwift"])
+    source_manufacturers: list[int] = field(default_factory=lambda: [260])
 
     @property
     def token_dir(self) -> Path:
@@ -78,12 +86,17 @@ class Config:
         return self.data_dir / "zwift_settings.json"
 
     @classmethod
+    def defaults(cls) -> "Config":
+        return cls(data_dir=data_dir())
+
+    @classmethod
     def load(cls) -> "Config":
-        """Environment defaults, then the values saved from the web UI."""
-        cfg = cls.from_env()
+        """The defaults, then the values saved from the web UI."""
+        cfg = cls.defaults()
         try:
             saved = json.loads(cfg.settings_file.read_text())
         except FileNotFoundError:
+            cfg._import_legacy_env()
             return cfg
         except (OSError, ValueError) as e:
             log.warning("Could not read %s: %s", cfg.settings_file, e)
@@ -94,6 +107,20 @@ class Config:
             log.warning("Ignoring saved Zwift settings: %s", e)
         return cfg
 
+    def _import_legacy_env(self) -> None:
+        """Keep the ZWIFT_* values of an old .env by saving them once in the settings file."""
+        values = {name: os.environ[env] for name, env in LEGACY_ENV.items() if os.environ.get(env, "").strip()}
+        if not values:
+            return
+        try:
+            self.update(values)
+            self.save()
+        except (ValueError, OSError) as e:
+            log.warning("Could not import the ZWIFT_* settings from .env: %s", e)
+            return
+        log.info("Imported %s from .env into %s. Change them in Settings → Zwift from now on.",
+                 ", ".join(LEGACY_ENV[name] for name in values), self.settings_file)
+
     def update(self, values: dict) -> None:
         """Validate and apply editable settings. Raises ValueError, changing nothing."""
         clean = {}
@@ -102,7 +129,7 @@ class Config:
             if kind is None:
                 continue
             if kind is bool:
-                clean[name] = value if isinstance(value, bool) else str(value).strip().lower() in ("1", "true", "yes", "on")
+                clean[name] = value if isinstance(value, bool) else str(value).strip().lower() in ("1", "true", "yes", "on", "oui")
             else:
                 try:
                     clean[name] = kind(value)
@@ -125,24 +152,3 @@ class Config:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         data = {name: getattr(self, name) for name in EDITABLE}
         self.settings_file.write_text(json.dumps(data, indent=2))
-
-    @classmethod
-    def from_env(cls) -> "Config":
-        return cls(
-            data_dir=data_dir(),
-            scan_days=int(os.getenv("ZWIFT_SCAN_DAYS", "7")),
-            scan_interval_minutes=int(os.getenv("ZWIFT_SCAN_INTERVAL_MINUTES", "30")),
-            auto_merge=_bool("ZWIFT_AUTO_MERGE", False),
-            delete_source=_bool("ZWIFT_DELETE_SOURCE", True),
-            copy_altitude=_bool("ZWIFT_COPY_ALTITUDE", False),
-            min_overlap=float(os.getenv("ZWIFT_MIN_OVERLAP", "0.5")),
-            min_position_ratio=float(os.getenv("ZWIFT_MIN_POSITION_RATIO", "0.5")),
-            time_tolerance_s=int(os.getenv("ZWIFT_TIME_TOLERANCE_S", "2")),
-            source_names=[s.strip() for s in os.getenv("ZWIFT_SOURCE_NAMES", "zwift").split(",") if s.strip()],
-            # 260 = Zwift in the FIT profile
-            source_manufacturers=[int(s) for s in os.getenv("ZWIFT_SOURCE_MANUFACTURERS", "260").split(",") if s.strip()],
-            zwift_email=os.getenv("ZWIFT_EMAIL") or None,
-            zwift_password=os.getenv("ZWIFT_PASSWORD") or None,
-            zwift_auto_sync=_bool("ZWIFT_AUTO_SYNC", True),
-            auto_scan=_bool("ZWIFT_AUTO_SCAN", True),
-        )

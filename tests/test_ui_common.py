@@ -167,3 +167,40 @@ def test_workouts_page_explains_the_sync(client, monkeypatch):
     page = client.get("/liftosaur/workouts").text
     assert "How it works" in page and "watch activity ±20 min" in page and "45 s per set" in page
     assert "heart rate (display only)" in page and "Update Sets" in page
+
+
+def test_old_zwift_env_values_are_imported_once(tmp_path, monkeypatch):
+    from garmin_sync_hub.zwift import config as zcfg
+
+    monkeypatch.setattr(zcfg, "data_dir", lambda: tmp_path)
+    monkeypatch.setenv("ZWIFT_AUTO_MERGE", "true")
+    monkeypatch.setenv("ZWIFT_SCAN_DAYS", "14")
+    cfg = zcfg.Config.load()
+    assert cfg.auto_merge is True and cfg.scan_days == 14
+    assert json.loads((tmp_path / "zwift_settings.json").read_text())["scan_days"] == 14
+    monkeypatch.setenv("ZWIFT_SCAN_DAYS", "30")  # once saved, the file wins
+    assert zcfg.Config.load().scan_days == 14
+
+
+def test_defaults_without_env_or_file(tmp_path, monkeypatch):
+    from garmin_sync_hub.zwift import config as zcfg
+
+    monkeypatch.setattr(zcfg, "data_dir", lambda: tmp_path)
+    for env in zcfg.LEGACY_ENV.values():
+        monkeypatch.delenv(env, raising=False)
+    cfg = zcfg.Config.load()
+    assert (cfg.auto_merge, cfg.scan_days, cfg.source_manufacturers) == (False, 7, [260])
+    assert not (tmp_path / "zwift_settings.json").exists()
+
+
+def test_startup_lists_obsolete_env_variables(monkeypatch):
+    from garmin_sync_hub.env import obsolete_env_messages
+
+    for name in ("GARMIN_EMAIL", "GARMIN_PASSWORD", "ZWIFT_EMAIL", "ZWIFT_PASSWORD", "ZWIFT_AUTO_MERGE"):
+        monkeypatch.delenv(name, raising=False)
+    assert obsolete_env_messages() == []
+    monkeypatch.setenv("GARMIN_PASSWORD", "x")
+    monkeypatch.setenv("ZWIFT_AUTO_MERGE", "true")
+    messages = obsolete_env_messages()
+    assert any(m.startswith("GARMIN_PASSWORD in .env is ignored: connect Garmin") for m in messages)
+    assert any(m.startswith("ZWIFT_AUTO_MERGE in .env is ignored: now in Settings") for m in messages)

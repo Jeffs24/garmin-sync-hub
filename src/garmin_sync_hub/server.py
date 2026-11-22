@@ -385,6 +385,10 @@ def _garmin_health_loop() -> None:
 
 def _start_background_jobs() -> None:
     """Start the Zwift scan loop, the Garmin check and, if enabled, the Liftosaur auto-sync timer."""
+    from garmin_sync_hub.env import obsolete_env_messages
+
+    for message in obsolete_env_messages():
+        logger.warning(message)
     zwift_module.start()
     _garmin_check_stop.clear()
     threading.Thread(target=_garmin_health_loop, name="garmin-check", daemon=True).start()

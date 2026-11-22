@@ -56,7 +56,7 @@ For each pair of *watch activity without a map* + *Zwift activity with a map* th
 1. Both original FIT files are downloaded and backed up in `data/zwift_backups/<id>/`.
 2. The Zwift GPS position (and, optionally, altitude) is added to the watch FIT, point by point, by timestamp. Everything else in the watch file is kept byte for byte. The only other change is the file creation time, one second later, because Garmin refuses a file it has already seen, even after the activity was deleted. The device identity is untouched, so the activity still counts as a watch activity.
 3. The merged file is read back and validated.
-4. **Only when you ask** (Merge, Merge all, or `ZWIFT_AUTO_MERGE=true`), the merged file is imported first; the original watch activity and the Zwift copy are deleted only once the merged activity is on Garmin. Name, description, type and gear are restored.
+4. **Only when you ask** (Merge, Merge all, or **Merge automatically** in Settings → Zwift), the merged file is imported first; the original watch activity and the Zwift copy are deleted only once the merged activity is on Garmin. Name, description, type and gear are restored.
 
 Every Garmin step is checked against the activity list, since Garmin sometimes answers with an error (such as a 504) for a request that went through. If an earlier attempt left the watch activity deleted without a replacement, clicking **Merge** again imports it from the backups.
 
@@ -72,26 +72,15 @@ Offline merge of two files: `garmin-sync-hub zwift-merge-files watch.fit zwift.f
 
 ## Configuration (`.env`)
 
-The `ZWIFT_*` variables give the starting values; once you save the Zwift settings in the web UI, the saved values win.
+Garmin, Liftosaur and Zwift are set up in the web UI (**Settings**), sign-ins included: only tokens are stored, never a password. The `.env` file holds what the UI cannot:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `HUB_PASSWORD` | *(empty)* | password for the web UI |
-| `LIFTOSAUR_API_KEY` | *(empty)* | Liftosaur API key (also settable in the UI) |
-| `GARMIN_EMAIL` / `GARMIN_PASSWORD` | *(empty)* | automatic Garmin login at startup (accounts without MFA) |
-| `ZWIFT_AUTO_MERGE` | `false` | merge every detected pair without a click |
-| `ZWIFT_DELETE_SOURCE` | `true` | delete the Zwift copy on Garmin after merging |
-| `ZWIFT_COPY_ALTITUDE` | `false` | also copy the Zwift virtual altitude |
-| `ZWIFT_SCAN_DAYS` | `7` | period scanned for new pairs |
-| `ZWIFT_AUTO_SCAN` | `true` | scan on a schedule (Auto-sync) |
-| `ZWIFT_SCAN_INTERVAL_MINUTES` | `30` | time between two scans |
-| `ZWIFT_MIN_OVERLAP` | `0.5` | minimum overlap (shared time / combined time) |
-| `ZWIFT_MIN_POSITION_RATIO` | `0.5` | minimum share of watch points that get a position |
-| `ZWIFT_TIME_TOLERANCE_S` | `2` | maximum gap between a watch point and a Zwift point |
-| `ZWIFT_SOURCE_NAMES` | `zwift` | how the Zwift copy is recognized (manufacturer or name) |
-| `ZWIFT_SOURCE_MANUFACTURERS` | `260` | FIT manufacturer required for the source (260 = Zwift) |
-| `ZWIFT_EMAIL` / `ZWIFT_PASSWORD` | *(empty)* | automatic Zwift login at startup |
-| `ZWIFT_AUTO_SYNC` | `true` | fetch new Zwift activities at each scan |
+| `LIFTOSAUR_API_KEY` | *(empty)* | Liftosaur API key, if you prefer it here than in Settings → Liftosaur |
+| `TZ` | `UTC` | time zone of the container (log times) |
+
+**Upgrading from 1.1 or older**: the `ZWIFT_*` settings (merge mode, scan, thresholds) are imported once into `data/zwift_settings.json` if you never saved the Zwift settings, then ignored. `GARMIN_EMAIL` / `GARMIN_PASSWORD` and `ZWIFT_EMAIL` / `ZWIFT_PASSWORD` are ignored: connect in Settings if you are not connected yet. A Garmin password saved by older versions in `data/liftosaur.json` is removed. The startup log lists every variable you can delete from `.env`.
 
 ## Data
 

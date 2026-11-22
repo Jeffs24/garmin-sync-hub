@@ -266,8 +266,8 @@ def main() -> None:
         description="Garmin Connect automations: Liftosaur workouts and Zwift maps",
     )
     parser.add_argument("--liftosaur-api-key", help="Liftosaur API key (or LIFTOSAUR_API_KEY env var)")
-    parser.add_argument("--garmin-email", help="Garmin email (or GARMIN_EMAIL env var)")
-    parser.add_argument("--garmin-password", help="Garmin password (or GARMIN_PASSWORD env var)")
+    parser.add_argument("--garmin-email", help="Garmin email, to connect from the command line (no MFA)")
+    parser.add_argument("--garmin-password", help="Garmin password, used for this login only and never saved")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
     parser.add_argument("-q", "--quiet", action="store_true", help="Suppress logging")
 

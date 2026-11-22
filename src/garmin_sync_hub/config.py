@@ -58,10 +58,9 @@ def get_update_existing(config: dict[str, Any] | None = None) -> tuple[bool, int
 
 
 def load_config() -> dict[str, Any]:
-    """Load config from file, then overlay environment variables.
+    """Load config from file. LIFTOSAUR_API_KEY in the environment fills a missing key.
 
-    Env vars take precedence over config file values:
-      LIFTOSAUR_API_KEY, GARMIN_EMAIL, GARMIN_PASSWORD
+    Garmin is connected from the web UI (tokens only): no Garmin password is read or kept.
     """
     import os
 
@@ -77,6 +76,10 @@ def load_config() -> dict[str, Any]:
                     saved["liftosaur_api_key"] = saved[_LEGACY_API_KEY_FIELD]
                 saved.pop(_LEGACY_API_KEY_FIELD, None)
                 migrated = True
+            if "garmin_password" in saved:
+                # Before 1.2.0, GARMIN_PASSWORD from .env could be saved here in clear text.
+                saved.pop("garmin_password", None)
+                migrated = True
             _deep_merge(config, saved)
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Could not load config: %s", e)
@@ -84,10 +87,6 @@ def load_config() -> dict[str, Any]:
     # Environment variables fill gaps left by the config file.
     if not config.get("liftosaur_api_key") and os.environ.get("LIFTOSAUR_API_KEY"):
         config["liftosaur_api_key"] = os.environ["LIFTOSAUR_API_KEY"]
-    if not config.get("garmin_email") and os.environ.get("GARMIN_EMAIL"):
-        config["garmin_email"] = os.environ["GARMIN_EMAIL"]
-    if not config.get("garmin_password") and os.environ.get("GARMIN_PASSWORD"):
-        config["garmin_password"] = os.environ["GARMIN_PASSWORD"]
 
     if migrated:
         save_config(config)
@@ -99,6 +98,7 @@ def save_config(config: dict[str, Any]) -> None:
     """Save config to file. Silently skips on read-only filesystems."""
     try:
         config.pop(_LEGACY_API_KEY_FIELD, None)
+        config.pop("garmin_password", None)  # never stored: Garmin keeps tokens only
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(json.dumps(config, indent=2))
     except OSError:

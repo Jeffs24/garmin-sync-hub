@@ -184,7 +184,7 @@ def test_zwift_settings_are_saved_and_applied(own_cfg):
     assert m.cfg.min_overlap == 0.6
     assert m.state["next_scan"] is None  # auto-sync is off
 
-    reloaded = Config.from_env()
+    reloaded = Config.defaults()
     reloaded.data_dir = m.cfg.data_dir
     import json
     reloaded.update(json.loads(m.cfg.settings_file.read_text()))
