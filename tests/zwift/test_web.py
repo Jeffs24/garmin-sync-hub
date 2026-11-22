@@ -233,13 +233,13 @@ def test_pairs_page_explains_the_merge_with_current_settings(own_cfg):
     c, m = own_cfg
     m.cfg.copy_altitude, m.cfg.delete_source = False, True
     page = c.get("/zwift").text
-    assert "How it works" in page and "<details class=\"card\" open" in page  # open while no pairs
-    assert "not the altitude (off in settings)" in page and "the Zwift copy is deleted" in page
+    assert "How it works" in page and "<details class=\"card pipeline\" open" in page  # open while no pairs
+    assert "watch data + GPS<" in page and "watch + Zwift copy" in page
     m.cfg.copy_altitude, m.cfg.delete_source = True, False
     m.store.upsert_detected(1, 2, "Run", "Zwift", "2026-11-20T12:00:00+00:00", 0.97)
     page = c.get("/zwift").text
-    assert "the virtual altitude" in page and "the Zwift copy is kept" in page
-    assert "<details class=\"card\" open" not in page
+    assert "watch data + GPS + altitude" in page and "watch (copy kept)" in page
+    assert "<details class=\"card pipeline\" open" not in page
 
 
 def test_restore_button_only_for_merged_pairs_with_backups(client, monkeypatch):

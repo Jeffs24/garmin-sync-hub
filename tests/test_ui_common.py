@@ -157,3 +157,13 @@ def test_mappings_page_never_waits_for_liftosaur(client, monkeypatch):
         assert calls == [1]  # a recent scan is not repeated
     finally:
         _db.set_app_config(server.UNMAPPED_CACHE_KEY, {})
+
+
+def test_workouts_page_explains_the_sync(client, monkeypatch):
+    monkeypatch.setattr(server, "load_config", lambda: {
+        "liftosaur_api_key": "", "user_profile": {}, "timing": {"working_set_seconds": 45},
+        "update_existing": {"enabled": True, "match_window_minutes": 20}, "hr_fusion": {"enabled": True}})
+    db.get_db().set_app_config("workouts_page_1", {"workouts": [], "page_count": 1})
+    page = client.get("/liftosaur/workouts").text
+    assert "How it works" in page and "watch activity ±20 min" in page and "45 s per set" in page
+    assert "heart rate (display only)" in page and "Update Sets" in page

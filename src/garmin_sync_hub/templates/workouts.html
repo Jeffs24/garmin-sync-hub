@@ -328,6 +328,8 @@
 </div>
 {% endif %}
 
+{% with open = not lift.synced %}{% include "partials/liftosaur_flow.html" %}{% endwith %}
+
 <script>
 const hrChartCache = {};
 

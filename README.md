@@ -33,7 +33,7 @@ Set `HUB_PASSWORD` in `.env` to protect the web UI with a password if it can be 
 
 ## Liftosaur → Garmin
 
-**Liftosaur → Workouts** lists your Liftosaur workouts; sync them one by one or all at once (**Sync now**, also on the Overview). Auto-sync runs on a schedule you choose on the same page.
+**Liftosaur → Workouts** lists your Liftosaur workouts; sync them one by one or all at once (**Sync now**, also on the Overview). Auto-sync runs on a schedule you choose on the same page. A **How it works** card at the bottom shows what is sent to Garmin, with your current settings.
 
 A synced workout has three actions:
 
@@ -42,7 +42,7 @@ A synced workout has three actions:
 - **Unsync**: forgets the sync without touching Garmin.
 
 - **Mappings**: Liftosaur exercises are mapped to Garmin's exercise categories. Unmapped exercises show as "Unknown" on Garmin; map them from **Liftosaur → Mappings**.
-- **Heart rate**: when your watch recorded the session, its heart rate is merged into the uploaded workout.
+- **Heart rate**: Liftosaur records none, so an uploaded workout has no heart rate and its calories are estimated at 90 bpm from your profile. With **Update existing activities**, the strength activity your watch recorded keeps its heart rate and gets your sets. **Heart Rate Data** in Settings draws the watch's all-day heart rate on each workout in Workouts; it is not added to the file sent to Garmin.
 - **Update existing activities**: if your watch already recorded the strength session, the workout's exercises and sets are written into that activity instead of creating a new one.
 
 Command line (inside the container: `docker compose exec garmin-sync-hub garmin-sync-hub <command>`): `sync`, `status`, `list`, `unmapped`, `map`, `unsync`, `init` (interactive setup), `serve` (web UI), `export-garmin-token`.

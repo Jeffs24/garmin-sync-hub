@@ -1,52 +1,77 @@
-{# What the Zwift merge takes from where. Needs `cfg` (Zwift Config), `zwift_connected`, `open`. #}
-<style>
-    .zf { display: grid; grid-template-columns: minmax(0, 1fr) 40px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 14px; }
-    .zf-inputs { display: grid; gap: 6px; }
-    .zf-box { border: 1px solid var(--border); border-left: 3px solid var(--src); border-radius: var(--radius-sm); padding: 10px 12px; background: var(--bg-secondary); font-size: 13px; }
-    .zf-box h4 { margin: 0 0 4px; font-size: 13px; color: var(--src); }
-    .zf-box ul { margin: 4px 0 0 16px; padding: 0; color: var(--text-secondary); line-height: 1.6; }
-    .zf-box .zf-from { color: var(--text-muted); font-size: 12px; }
-    .zf-plus, .zf-arrow { text-align: center; color: var(--text-muted); font-size: 18px; line-height: 1; }
-    .zf-arrow::before { content: "→"; }
-    .zf-steps { margin: 14px 0 0 18px; padding: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.7; }
-    .zf-muted { color: var(--text-muted); }
-    @media (max-width: 640px) {
-        .zf { grid-template-columns: minmax(0, 1fr); }
-        .zf-arrow::before { content: "↓"; }
-    }
-</style>
-<details class="card" {% if open %}open{% endif %}>
+{# The Zwift map pipeline, drawn like the Liftosaur one (partials/liftosaur_flow.html).
+   Needs `cfg` (Zwift Config), `zwift_connected`, `open`. Styles: .pipeline in base.html. #}
+<details class="card pipeline" {% if open %}open{% endif %}>
     <summary class="card-title" style="cursor: pointer;">How it works</summary>
-    <div class="zf" role="group" aria-label="What the merge takes from each activity">
-        <div class="zf-inputs">
-            <div class="zf-box src-garmin">
-                <h4>Watch activity <span class="zf-from">on Garmin, no map</span></h4>
-                <div class="zf-muted">Kept exactly as recorded:</div>
-                <ul><li>heart rate, power, cadence, footpod</li><li>laps, time, distance, device</li><li>name, description, type, gear</li></ul>
-            </div>
-            <div class="zf-plus" aria-hidden="true">+</div>
-            <div class="zf-box src-zwift">
-                <h4>Zwift copy <span class="zf-from">same ride or run</span></h4>
-                <div class="zf-muted">Found on Garmin{% if zwift_connected %}, in your Zwift account{% endif %}, or in a FIT file you upload. Gives only:</div>
-                <ul><li>the GPS track (the Zwift map)</li>{% if cfg.copy_altitude %}<li>the virtual altitude</li>{% else %}<li class="zf-muted">not the altitude (off in settings)</li>{% endif %}</ul>
-            </div>
-        </div>
-        <div class="zf-arrow" aria-hidden="true"></div>
-        <div class="zf-box src-garmin">
-            <h4>Merged activity <span class="zf-from">on Garmin</span></h4>
-            <ul>
-                <li>all the watch data, plus the map</li>
-                <li>name, description, type and gear restored</li>
-                <li>replaces the watch activity</li>
-                {% if cfg.delete_source %}<li>the Zwift copy is deleted</li>{% else %}<li class="zf-muted">the Zwift copy is kept (off in settings)</li>{% endif %}
-            </ul>
-        </div>
+    <div class="pipeline-scroll">
+    <svg viewBox="0 0 900 290" role="img" aria-label="Zwift map pipeline" xmlns="http://www.w3.org/2000/svg" font-family="Inter,sans-serif">
+        <defs>
+            <marker id="zf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#64748b"/></marker>
+            <marker id="zf-arrow-back" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a78bfa"/></marker>
+        </defs>
+
+        <!-- 1a. Watch activity -->
+        <rect x="10" y="20" width="160" height="62" rx="8" fill="rgba(0,135,90,0.1)" stroke="rgba(0,135,90,0.35)"/>
+        <line x1="10" y1="23" x2="170" y2="23" stroke="#00875a" stroke-width="3"/>
+        <text x="90" y="47" text-anchor="middle" fill="#34d399" font-size="13" font-weight="700">Watch Activity</text>
+        <text x="90" y="64" text-anchor="middle" fill="#64748b" font-size="10">on Garmin, no map</text>
+
+        <!-- 1b. Zwift copy -->
+        <rect x="10" y="130" width="160" height="62" rx="8" fill="rgba(251,146,60,0.1)" stroke="rgba(251,146,60,0.35)"/>
+        <line x1="10" y1="133" x2="170" y2="133" stroke="#fb923c" stroke-width="3"/>
+        <text x="90" y="157" text-anchor="middle" fill="#fdba74" font-size="13" font-weight="700">Zwift Copy</text>
+        <text x="90" y="174" text-anchor="middle" fill="#64748b" font-size="10">{% if zwift_connected and cfg.zwift_auto_sync %}Garmin, Zwift account or file{% else %}on Garmin or a FIT file{% endif %}</text>
+
+        <path d="M173,51 C190,51 190,95 207,95" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#zf-arrow)"/>
+        <path d="M173,161 C190,161 190,117 207,117" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#zf-arrow)"/>
+
+        <!-- 2. Pair -->
+        <rect x="210" y="75" width="150" height="62" rx="8" fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.35)" stroke-dasharray="6,3"/>
+        <text x="285" y="100" text-anchor="middle" fill="#93c5fd" font-size="13" font-weight="700">Pair</text>
+        <text x="285" y="117" text-anchor="middle" fill="#64748b" font-size="10">overlap ≥ {{ (cfg.min_overlap * 100)|round|int }}%, last {{ cfg.scan_days }} days</text>
+        <line x1="363" y1="106" x2="395" y2="106" stroke="#64748b" stroke-width="1.5" marker-end="url(#zf-arrow)"/>
+
+        <!-- 3. Merge FIT -->
+        <rect x="400" y="75" width="160" height="62" rx="8" fill="rgba(245,158,11,0.08)" stroke="rgba(245,158,11,0.3)"/>
+        <line x1="400" y1="78" x2="560" y2="78" stroke="#f59e0b" stroke-width="3"/>
+        <text x="480" y="100" text-anchor="middle" fill="#fbbf24" font-size="13" font-weight="700">Merge FIT</text>
+        <text x="480" y="117" text-anchor="middle" fill="#64748b" font-size="10">watch data + GPS{% if cfg.copy_altitude %} + altitude{% endif %}</text>
+        <text x="490" y="156" fill="#475569" font-size="9.5" font-style="italic">Simulate and Preview stop here</text>
+        <line x1="563" y1="106" x2="595" y2="106" stroke="#64748b" stroke-width="1.5" marker-end="url(#zf-arrow)"/>
+        <text x="579" y="96" text-anchor="middle" fill="#94a3b8" font-size="9.5" font-weight="600">{% if cfg.auto_merge %}auto{% else %}Merge{% endif %}</text>
+
+        <!-- 4. Garmin: upload merged -->
+        <rect x="600" y="75" width="140" height="62" rx="8" fill="rgba(0,135,90,0.1)" stroke="rgba(0,135,90,0.35)"/>
+        <line x1="600" y1="78" x2="740" y2="78" stroke="#00875a" stroke-width="3"/>
+        <text x="670" y="100" text-anchor="middle" fill="#34d399" font-size="13" font-weight="700">Garmin</text>
+        <text x="670" y="117" text-anchor="middle" fill="#64748b" font-size="10">Upload merged first</text>
+        <line x1="743" y1="106" x2="770" y2="106" stroke="#64748b" stroke-width="1.5" marker-end="url(#zf-arrow)"/>
+
+        <!-- 5. Delete originals -->
+        <rect x="775" y="75" width="115" height="62" rx="8" fill="rgba(239,68,68,0.07)" stroke="rgba(239,68,68,0.3)"/>
+        <line x1="775" y1="78" x2="890" y2="78" stroke="#ef4444" stroke-width="3"/>
+        <text x="832" y="100" text-anchor="middle" fill="#f87171" font-size="12.5" font-weight="700">Delete</text>
+        <text x="832" y="117" text-anchor="middle" fill="#64748b" font-size="10">{% if cfg.delete_source %}watch + Zwift copy{% else %}watch (copy kept){% endif %}</text>
+        <text x="745" y="62" text-anchor="middle" fill="#475569" font-size="9.5" font-style="italic">name, description, type and gear restored</text>
+
+        <!-- Backups and Restore -->
+        <line x1="480" y1="140" x2="480" y2="203" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#zf-arrow-back)"/>
+        <rect x="400" y="207" width="160" height="50" rx="8" fill="rgba(167,139,250,0.08)" stroke="rgba(167,139,250,0.4)" stroke-dasharray="6,3"/>
+        <text x="480" y="228" text-anchor="middle" fill="#a78bfa" font-size="11.5" font-weight="700">Backups</text>
+        <text x="480" y="244" text-anchor="middle" fill="#64748b" font-size="10">every original FIT</text>
+        <path d="M563,232 C640,232 670,200 670,141" fill="none" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#zf-arrow-back)"/>
+        <text x="640" y="222" fill="#a78bfa" font-size="9.5" font-weight="600">Restore</text>
+
+        <!-- Legend -->
+        <line x1="590" y1="278" x2="620" y2="278" stroke="#64748b" stroke-width="1.5" marker-end="url(#zf-arrow)"/>
+        <text x="628" y="282" fill="#64748b" font-size="9.5">merge flow</text>
+        <line x1="700" y1="278" x2="730" y2="278" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#zf-arrow-back)"/>
+        <text x="738" y="282" fill="#a78bfa" font-size="9.5">backups and undo</text>
+    </svg>
     </div>
-    <ol class="zf-steps">
-        <li><b>Pair</b>: {% if cfg.auto_scan %}every {{ cfg.scan_interval_minutes }} min{% else %}when you click Scan now{% endif %}, activities from the last {{ cfg.scan_days }} days are matched when they overlap by at least {{ (cfg.min_overlap * 100)|round|int }}%.
-            Each watch point gets the Zwift position closest in time (within {{ cfg.time_tolerance_s }} s).</li>
-        <li><b>Check</b> (optional): Simulate builds the file without touching Garmin; Preview shows its map and charts.</li>
-        <li><b>Merge</b>: {% if cfg.auto_merge %}automatic for every pair found{% else %}only when you click Merge{% endif %}. The merged file is uploaded first; the old activities are deleted only once it is on Garmin. Backups stay in <code>data/zwift_backups</code>.</li>
-    </ol>
-    <p class="zw-msg"><a href="/settings#zwift">Change these options</a></p>
+    <p class="pipeline-note">
+        {% if cfg.auto_scan %}Scans run every {{ cfg.scan_interval_minutes|interval_label }}{% else %}Scans run when you click Scan now{% endif %}.
+        Each watch point gets the Zwift position closest in time (within {{ cfg.time_tolerance_s }} s); everything else in the watch file is kept.
+        Nothing is deleted before the merged activity is on Garmin. Backups stay in <code>data/zwift_backups</code>.
+        <a href="/settings#zwift">Change these options</a>
+    </p>
 </details>

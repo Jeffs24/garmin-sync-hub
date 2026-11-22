@@ -831,7 +831,31 @@ async def workouts_page(request: Request):
         logger.error("Failed to fetch workouts: %s", e)
         fetch_error = str(e)
     hr_fusion = config.get("hr_fusion", {}).get("enabled", True)
-    return _render("workouts.html", workouts=workouts, hr_fusion_enabled=hr_fusion, page=page, page_count=page_count, fetch_error=fetch_error, lift=_liftosaur_summary(config), request=request)
+    lift = _liftosaur_summary(config)
+    return _render("workouts.html", workouts=workouts, hr_fusion_enabled=hr_fusion, page=page, page_count=page_count,
+                   fetch_error=fetch_error, lift=lift, flow=_liftosaur_flow(config), request=request)
+
+
+def _liftosaur_flow(config: dict[str, Any]) -> dict[str, Any]:
+    """Settings shown in the "How it works" card of Liftosaur → Workouts."""
+    from garmin_sync_hub.liftosaur.fit import DEFAULT_HR_BPM
+    from garmin_sync_hub.liftosaur.mapper import EXERCISE_TO_GARMIN, _custom_mappings, _ensure_custom_loaded
+
+    _ensure_custom_loaded()
+    update_existing, match_window = get_update_existing(config)
+    auto = config.get("auto_sync", {})
+    timing = config.get("timing", {})
+    return {
+        "update_existing": update_existing,
+        "match_window": match_window,
+        "auto_sync": bool(auto.get("enabled")),
+        "interval": auto.get("interval_minutes", 120),
+        "mapping_count": len(set(EXERCISE_TO_GARMIN) | set(_custom_mappings)),
+        "working_set": timing.get("working_set_seconds", 40),
+        "rest_sets": timing.get("rest_between_sets_seconds", 75),
+        "default_hr": DEFAULT_HR_BPM,
+        "hr_fusion": config.get("hr_fusion", {}).get("enabled", True),
+    }
 
 
 @app.get("/api/workout/{workout_id}/hr", response_class=HTMLResponse)

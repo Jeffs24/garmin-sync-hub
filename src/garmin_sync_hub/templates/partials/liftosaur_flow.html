@@ -1,0 +1,88 @@
+{# The Liftosaur pipeline (drawn like liftosaur2garmin's dashboard diagram), with its two paths:
+   the workout is not on Garmin yet, or the watch already recorded it.
+   Needs `flow` (see _liftosaur_flow in server.py) and `open`. Styles: .pipeline in base.html. #}
+{% set ue = flow.update_existing %}
+<details class="card pipeline" {% if open %}open{% endif %} style="margin-top: 16px;">
+    <summary class="card-title" style="cursor: pointer;">How it works</summary>
+    <div class="pipeline-scroll">
+    <svg viewBox="0 0 900 300" role="img" aria-label="Liftosaur to Garmin pipeline" xmlns="http://www.w3.org/2000/svg" font-family="Inter,sans-serif">
+        <defs>
+            <marker id="lf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#64748b"/></marker>
+            <marker id="lf-arrow-hr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f43f5e"/></marker>
+        </defs>
+
+        <!-- 1. Liftosaur API -->
+        <rect x="10" y="80" width="150" height="62" rx="8" fill="rgba(99,102,241,0.1)" stroke="rgba(99,102,241,0.35)"/>
+        <line x1="10" y1="83" x2="160" y2="83" stroke="#6366f1" stroke-width="3"/>
+        <text x="85" y="108" text-anchor="middle" fill="#818cf8" font-size="13" font-weight="700">Liftosaur API</text>
+        <text x="85" y="125" text-anchor="middle" fill="#64748b" font-size="10">{% if flow.auto_sync %}Fetch every {{ flow.interval|interval_label }}{% else %}Fetch on Sync now{% endif %}</text>
+        <line x1="163" y1="111" x2="195" y2="111" stroke="#64748b" stroke-width="1.5" marker-end="url(#lf-arrow)"/>
+
+        <!-- 2. Map exercises -->
+        <rect x="200" y="80" width="150" height="62" rx="8" fill="rgba(168,85,247,0.08)" stroke="rgba(168,85,247,0.3)"/>
+        <line x1="200" y1="83" x2="350" y2="83" stroke="#a855f7" stroke-width="3"/>
+        <text x="275" y="108" text-anchor="middle" fill="#c084fc" font-size="13" font-weight="700">Map Exercises</text>
+        <text x="275" y="125" text-anchor="middle" fill="#64748b" font-size="10">{{ flow.mapping_count }} known, others “Unknown”</text>
+        <line x1="353" y1="111" x2="385" y2="111" stroke="#64748b" stroke-width="1.5" marker-end="url(#lf-arrow)"/>
+
+        <!-- 3. Already on Garmin? -->
+        <rect x="390" y="80" width="160" height="62" rx="8" fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.35)" stroke-dasharray="6,3"/>
+        <text x="470" y="106" text-anchor="middle" fill="#93c5fd" font-size="12.5" font-weight="700">Already on Garmin?</text>
+        <text x="470" y="123" text-anchor="middle" fill="#64748b" font-size="10">{% if ue %}watch activity ±{{ flow.match_window }} min{% else %}not checked (setting off){% endif %}</text>
+
+        <!-- Path A: not on Garmin yet -->
+        <path d="M553,100 C575,100 575,42 597,42" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#lf-arrow)"/>
+        <text x="560" y="62" fill="#94a3b8" font-size="9.5" font-weight="600">{% if ue %}no{% else %}always{% endif %}</text>
+        <rect x="600" y="10" width="140" height="62" rx="8" fill="rgba(245,158,11,0.08)" stroke="rgba(245,158,11,0.3)"/>
+        <line x1="600" y1="13" x2="740" y2="13" stroke="#f59e0b" stroke-width="3"/>
+        <text x="670" y="37" text-anchor="middle" fill="#fbbf24" font-size="13" font-weight="700">Generate FIT</text>
+        <text x="670" y="54" text-anchor="middle" fill="#64748b" font-size="10">sets + calories est.</text>
+        <line x1="743" y1="41" x2="770" y2="41" stroke="#64748b" stroke-width="1.5" marker-end="url(#lf-arrow)"/>
+        <rect x="775" y="10" width="115" height="62" rx="8" fill="rgba(0,135,90,0.1)" stroke="rgba(0,135,90,0.35)"/>
+        <line x1="775" y1="13" x2="890" y2="13" stroke="#00875a" stroke-width="3"/>
+        <text x="832" y="37" text-anchor="middle" fill="#34d399" font-size="13" font-weight="700">Garmin</text>
+        <text x="832" y="54" text-anchor="middle" fill="#64748b" font-size="10">New activity</text>
+
+        <!-- Path B: the watch recorded it -->
+        <g {% if not ue %}opacity="0.35"{% endif %}>
+        <path d="M553,122 C575,122 575,180 597,180" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#lf-arrow)"/>
+        <text x="560" y="166" fill="#94a3b8" font-size="9.5" font-weight="600">yes</text>
+        <rect x="600" y="149" width="140" height="62" rx="8" fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.35)"/>
+        <line x1="600" y1="152" x2="740" y2="152" stroke="#3b82f6" stroke-width="3"/>
+        <text x="670" y="176" text-anchor="middle" fill="#93c5fd" font-size="13" font-weight="700">Update Sets</text>
+        <text x="670" y="193" text-anchor="middle" fill="#64748b" font-size="10">reps + weights</text>
+        <line x1="743" y1="180" x2="770" y2="180" stroke="#64748b" stroke-width="1.5" marker-end="url(#lf-arrow)"/>
+        <rect x="775" y="149" width="115" height="62" rx="8" fill="rgba(0,135,90,0.1)" stroke="rgba(0,135,90,0.35)"/>
+        <line x1="775" y1="152" x2="890" y2="152" stroke="#00875a" stroke-width="3"/>
+        <text x="832" y="176" text-anchor="middle" fill="#34d399" font-size="13" font-weight="700">Garmin</text>
+        <text x="832" y="193" text-anchor="middle" fill="#64748b" font-size="10">Watch activity</text>
+        </g>
+        <text x="745" y="228" text-anchor="middle" fill="#475569" font-size="9.5" font-style="italic">{% if ue %}keeps the watch's heart rate, calories and set times{% else %}“Update existing activities” is off: the workout is uploaded next to the watch activity{% endif %}</text>
+        <text x="670" y="90" text-anchor="middle" fill="#475569" font-size="9.5" font-style="italic">no heart rate: calories at {{ flow.default_hr }} bpm</text>
+
+        {% if flow.hr_fusion %}
+        <!-- Heart rate chart: display only -->
+        <rect x="200" y="200" width="150" height="50" rx="8" fill="rgba(244,63,94,0.08)" stroke="rgba(244,63,94,0.4)" stroke-dasharray="6,3"/>
+        <text x="275" y="221" text-anchor="middle" fill="#f43f5e" font-size="11.5" font-weight="700">HR Chart</text>
+        <text x="275" y="237" text-anchor="middle" fill="#64748b" font-size="10">on this page only</text>
+        <path d="M390,240 L353,240" fill="none" stroke="#f43f5e" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#lf-arrow-hr)"/>
+        <rect x="390" y="215" width="160" height="50" rx="8" fill="rgba(0,135,90,0.06)" stroke="rgba(0,135,90,0.3)" stroke-dasharray="6,3"/>
+        <text x="470" y="236" text-anchor="middle" fill="#34d399" font-size="11.5" font-weight="600">Watch all-day HR</text>
+        <text x="470" y="252" text-anchor="middle" fill="#64748b" font-size="10">from Garmin</text>
+        {% endif %}
+
+        <!-- Legend -->
+        <line x1="590" y1="285" x2="620" y2="285" stroke="#64748b" stroke-width="1.5" marker-end="url(#lf-arrow)"/>
+        <text x="628" y="289" fill="#64748b" font-size="9.5">sync flow</text>
+        {% if flow.hr_fusion %}
+        <line x1="700" y1="285" x2="730" y2="285" stroke="#f43f5e" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#lf-arrow-hr)"/>
+        <text x="738" y="289" fill="#f43f5e" font-size="9.5">heart rate (display only)</text>
+        {% endif %}
+    </svg>
+    </div>
+    <p class="pipeline-note">
+        A workout already synced is skipped; a failed one is tried again later{% if not flow.auto_sync %} with auto-sync on{% endif %}.
+        Sets are timed with your settings ({{ flow.working_set }} s per set, {{ flow.rest_sets }} s of rest). An upload can be undone from this page.
+        <a href="/settings#liftosaur">Change these options</a>
+    </p>
+</details>
