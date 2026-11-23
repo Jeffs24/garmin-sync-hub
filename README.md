@@ -97,7 +97,7 @@ Health data covers the days since your first activity (or the date set in **Sett
 docker compose exec garmin-sync-hub rclone config --config /data/rclone.conf
 ```
 
-For Google Drive, choose `drive`, answer `n` to "auto config" and follow the link it gives. Then enter the destination (for example `gdrive:Garmin`) in **Settings → Backup** and click **Test**. Nothing is ever deleted at the destination. To keep the backup on another disk instead, change `./garmin-backup` in `docker-compose.yml`.
+For Google Drive, choose `drive`, then the full access scope (`drive`, not `drive.file`, which only sees folders rclone created and would make a second folder next to yours), answer `n` to "auto config" and follow the link it gives. Then enter the destination (for example `gdrive:Garmin`) in **Settings → Backup** and click **Test**. Nothing is ever deleted at the destination. To keep the backup on another disk instead, change `./garmin-backup` in `docker-compose.yml`.
 
 ## Configuration (`.env`)
 

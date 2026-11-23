@@ -22,6 +22,7 @@ from ..auth import auth_enabled
 from ..garmin_session import GarminAuthRequired, shared_session
 from ..paths import data_dir
 from .engine import Backup, Progress, StopBackup, folder_size
+from .rclone_check import check_destination
 from .settings import BACKUP_INTERVALS, BackupSettings, backup_dir
 
 log = logging.getLogger(__name__)
@@ -197,8 +198,8 @@ class BackupModule:
     def rclone_config() -> Path:
         return data_dir() / "rclone.conf"
 
-    def rclone(self, args: list[str], timeout: float | None = None) -> tuple[bool, str]:
-        """Run rclone with the app's config file; (ok, last lines of output)."""
+    def rclone(self, args: list[str], timeout: float | None = None, full: bool = False) -> tuple[bool, str]:
+        """Run rclone with the app's config file; (ok, output: the last lines, or all of it with full)."""
         if not shutil.which("rclone"):
             return False, "rclone is not installed (it is included in the Docker image)."
         try:
@@ -206,6 +207,8 @@ class BackupModule:
                                   capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             return False, "rclone did not answer in time."
+        if full:
+            return done.returncode == 0, done.stdout + done.stderr
         out = (done.stdout + done.stderr).strip().splitlines()
         return done.returncode == 0, " ".join(out[-3:])[:500]
 
@@ -307,10 +310,12 @@ class BackupModule:
             remote = remote.strip() or m.settings.rclone_remote
             if ":" not in remote:
                 return HTMLResponse("<span class='state-failed'>Enter a destination like gdrive:Garmin.</span>")
-            ok, out = m.rclone(["lsd", remote.split(":", 1)[0] + ":", "--max-depth", "1"], timeout=60)
-            if ok:
-                return HTMLResponse(f"<span class='state-ok'>{html.escape(remote.split(':', 1)[0])} answers.</span>")
-            return HTMLResponse(f"<span class='state-failed'>{html.escape(out or 'rclone failed')}</span>")
+            if not shutil.which("rclone"):
+                return HTMLResponse("<span class='state-failed'>rclone is not installed (it is included in the Docker image).</span>")
+            checks = check_destination(remote, lambda args: m.rclone(args, timeout=60, full=True))
+            css = {"ok": "state-ok", "warn": "state-warning", "fail": "state-failed", "info": ""}
+            return HTMLResponse("".join(
+                f"<div class='{css[level]}' style='margin-top: 4px;'>{html.escape(text)}</div>" for level, text in checks))
 
         @router.post("/export", response_class=HTMLResponse)
         def export(request: Request) -> HTMLResponse:

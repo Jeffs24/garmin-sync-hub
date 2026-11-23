@@ -374,7 +374,7 @@
             After each backup, new files are copied to Google Drive, OneDrive, Dropbox, a NAS (SFTP, SMB) or S3 with
             <a href="https://rclone.org" target="_blank" rel="noopener">rclone</a>. Set up the connection once on the server:
             <code>docker compose exec garmin-sync-hub rclone config --config {{ rclone_config }}</code>
-            (for Google Drive, answer “n” to auto config and follow the link it gives). Nothing is deleted at the destination.
+            For Google Drive, choose the full access scope (<code>drive</code>) so an existing folder is used, answer “n” to auto config and follow the link it gives. Nothing is deleted at the destination. <b>Test</b> lists the folders rclone sees and warns about duplicates.
         </div>
         <div class="form-group" style="margin-bottom: 8px;">
             <label class="form-label" for="rclone_remote">Destination</label>

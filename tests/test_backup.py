@@ -314,3 +314,61 @@ def test_refused_sign_in_stops_at_once(tmp_path):
     with pytest.raises(SignInRefused, match="reconnect in Settings"):
         run(tmp_path, g, health=False)
     assert names(g, "get_activities") == []  # nothing else was tried
+
+
+def lsd(*names):
+    return "".join(f"          -1 2026-11-22 10:00:00        -1 {n}\n" for n in names)
+
+
+def fake_rclone(config: str, folders: dict[str, str]):
+    def run(args):
+        if args[:2] == ["config", "show"]:
+            return (bool(config), config or "Couldn't find remote")
+        if args[0] == "lsd":
+            return (args[1] in folders, folders.get(args[1], "directory not found"))
+        raise AssertionError(args)
+    return run
+
+
+DRIVE_FULL = "[gdrive]\ntype = drive\nscope = drive\ntoken = {\"secret\": 1}\n"
+DRIVE_FILE = "[gdrive]\ntype = drive\nscope = drive.file\ntoken = {}\n"
+
+
+def test_rclone_check_existing_folder():
+    from garmin_sync_hub.backup.rclone_check import check_destination
+
+    checks = check_destination("gdrive:Backups/Garmin", fake_rclone(DRIVE_FULL, {
+        "gdrive:": lsd("Backups", "My Photos"), "gdrive:Backups": lsd("Garmin", "Phone")}))
+    assert checks[0] == ("ok", "gdrive answers. Folders at gdrive:: Backups, My Photos.")
+    assert checks[-1] == ("ok", "Backups go into the existing folder gdrive:Backups/Garmin.")
+    assert not any(level == "warn" for level, _ in checks)
+    assert "secret" not in repr(checks)
+
+
+def test_rclone_check_limited_scope_and_duplicates():
+    from garmin_sync_hub.backup.rclone_check import check_destination
+
+    checks = check_destination("gdrive:Backups", fake_rclone(DRIVE_FILE, {"gdrive:": lsd("Backups", "Backups")}))
+    levels = [level for level, _ in checks]
+    assert levels.count("warn") == 2
+    assert "only sees the folders it created" in checks[1][1]
+    assert "2 folders are named “Backups” in gdrive:" in checks[-1][1]
+
+    checks = check_destination("gdrive:New/Sub", fake_rclone(DRIVE_FULL, {"gdrive:": lsd("Backups")}))
+    assert checks[-1] == ("info", "“New” does not exist in gdrive: yet: it is created at the first copy.")
+
+
+def test_rclone_check_unknown_remote():
+    from garmin_sync_hub.backup.rclone_check import check_destination
+
+    assert check_destination("nas:x", fake_rclone("", {}))[0][0] == "fail"
+
+
+def test_rclone_test_button_shows_the_checks(hub, monkeypatch):
+    c, m = hub
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/rclone")
+    run = fake_rclone(DRIVE_FILE, {"gdrive:": lsd("Backups")})
+    monkeypatch.setattr(m, "rclone", lambda args, timeout=None, full=False: run(args))
+    r = c.post("/backup/rclone/test", data={"remote": "gdrive:Backups"})
+    assert "state-warning" in r.text and "only sees the folders it created" in r.text
+    assert "Folders at gdrive:: Backups" in r.text
