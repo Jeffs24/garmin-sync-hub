@@ -227,7 +227,7 @@
         }
 
         /* ── Sources (one color each, used for badges and card accents) ── */
-        :root { --src-garmin: #10b981; --src-liftosaur: #818cf8; --src-zwift: #fb923c; --src-backup: #38bdf8; }
+        :root { --src-garmin: #10b981; --src-liftosaur: #818cf8; --src-zwift: #fb923c; --src-backup: #38bdf8; --src-dogs: #f472b6; }
         .source-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-bottom: 28px; }
         .source-card { display: flex; flex-direction: column; gap: 6px; border-top: 3px solid var(--src, var(--border)); }
         .source-card .source-name { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -238,6 +238,7 @@
         .src-liftosaur { --src: var(--src-liftosaur); }
         .src-zwift { --src: var(--src-zwift); }
         .src-backup { --src: var(--src-backup); }
+        .src-dogs { --src: var(--src-dogs); }
         .flow {
             display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
             padding: 3px 10px; border-radius: 100px; white-space: nowrap; width: max-content; max-width: 100%; font-size: 12px; font-weight: 600;
@@ -317,6 +318,7 @@
             <a href="/activity" {% if path.startswith('/activity') %}class="active" aria-current="page"{% endif %}>Activity</a>
             <a href="/liftosaur/workouts" {% if path.startswith('/liftosaur') %}class="active" aria-current="page"{% endif %}>Liftosaur</a>
             <a href="/zwift" {% if path.startswith('/zwift') %}class="active" aria-current="page"{% endif %}>Zwift</a>
+            <a href="/dogs" {% if path.startswith('/dogs') %}class="active" aria-current="page"{% endif %}>Dogs</a>
             <a href="/backup" {% if path.startswith('/backup') %}class="active" aria-current="page"{% endif %}>Backup</a>
             <a href="/settings" {% if path.startswith('/settings') %}class="active" aria-current="page"{% endif %}>Settings</a>
             {% if auth_enabled %}
@@ -336,7 +338,7 @@
         <a href="https://github.com/Jeffs24/garmin-sync-hub">garmin-sync-hub</a> &middot; Liftosaur workouts and Zwift maps for Garmin Connect &middot; based on <a href="https://github.com/drkostas/hevy2garmin">hevy2garmin</a> and <a href="https://github.com/Zettt/liftosaur2garmin">liftosaur2garmin</a>
     </footer>
     {# One-shot notices after a redirect: ?saved=<key> or ?error=<message>. #}
-    {% set notices = {"settings": "Settings saved.", "zwift": "Zwift settings saved.", "zwift-connected": "Zwift account connected.", "zwift-disconnected": "Zwift account disconnected.", "backup": "Backup settings saved.", "workout": "Workout sent to Garmin.", "unsynced": "Workout marked as not synced.", "undone": "Garmin activity deleted, the workout is pending again."} %}
+    {% set notices = {"settings": "Settings saved.", "zwift": "Zwift settings saved.", "zwift-connected": "Zwift account connected.", "zwift-disconnected": "Zwift account disconnected.", "backup": "Backup settings saved.", "dogs": "Saved.", "workout": "Workout sent to Garmin.", "unsynced": "Workout marked as not synced.", "undone": "Garmin activity deleted, the workout is pending again."} %}
     {% set q = request.query_params if request else {} %}
     <div id="toasts" role="status" aria-live="polite">
         {% if q.get("saved") in notices %}<div class="toast toast-success" data-auto><span>{{ notices[q.get("saved")] }}</span><button type="button" aria-label="Dismiss">&times;</button></div>{% endif %}

@@ -107,6 +107,11 @@ from garmin_sync_hub.backup.web import BackupModule  # noqa: E402
 backup_module = BackupModule()
 app.include_router(backup_module.router)
 
+from garmin_sync_hub.dogs.web import DogsModule  # noqa: E402
+
+dogs_module = DogsModule()
+app.include_router(dogs_module.router)
+
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon_ico() -> FileResponse:
@@ -396,6 +401,7 @@ def _start_background_jobs() -> None:
         logger.warning(message)
     zwift_module.start()
     backup_module.start()
+    dogs_module.start()
     _garmin_check_stop.clear()
     threading.Thread(target=_garmin_health_loop, name="garmin-check", daemon=True).start()
     config = load_config()
@@ -410,6 +416,7 @@ def _stop_background_jobs() -> None:
     _garmin_check_stop.set()
     zwift_module.stop()
     backup_module.stop()
+    dogs_module.stop()
     _stop_autosync()
 
 

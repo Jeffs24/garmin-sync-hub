@@ -204,22 +204,35 @@ def write_json(path: Path, value: Any) -> None:
 _ID_AT_END = re.compile(r"_(\d+)$")
 
 
-class Backup:
-    def __init__(self, client_factory: Callable[[], Garmin], root: Path, *, health: bool = True,
-                 health_since: date | None = None, stop: threading.Event | None = None,
-                 progress: Progress | None = None, pause_s: float | None = None, today: date | None = None):
+class AnyEvent:
+    """Looks like a threading.Event; set when any of the events is set (app shutdown, Stop button)."""
+
+    def __init__(self, *events: threading.Event):
+        self.events = events
+
+    def is_set(self) -> bool:
+        return any(e.is_set() for e in self.events)
+
+    def wait(self, timeout: float | None = None) -> bool:
+        waited = 0.0
+        while not self.is_set():
+            if timeout is not None and waited >= timeout:
+                return False
+            self.events[0].wait(1.0)
+            waited += 1.0
+        return True
+
+
+class PacedGarmin:
+    """Garmin requests spaced out, waiting out rate limits, stopped by `stop` (shared by jobs)."""
+
+    def __init__(self, client_factory: Callable[[], Garmin], *, stop: threading.Event | None = None,
+                 progress: Progress | None = None, pause_s: float | None = None):
         self.client_factory = client_factory
-        self.root = root
-        self.health = health
-        self.health_since = health_since
         self.stop = stop or threading.Event()
         self.p = progress or Progress()
         self.pause_s = PAUSE_S if pause_s is None else pause_s
-        self.today = today or date.today()
         self._client: Garmin | None = None
-        self._categories: dict[int, str] = {}
-
-    # --- plumbing -----------------------------------------------------------
 
     @property
     def g(self) -> Garmin:
@@ -244,10 +257,34 @@ class Backup:
                 if wait is None:
                     raise RateLimited("Garmin is limiting requests: the next run resumes from here") from None
                 self.p.message = f"Garmin is limiting requests, waiting {wait} s…"
-                log.info("Backup: rate limited, waiting %s s", wait)
+                log.info("Rate limited by Garmin, waiting %s s", wait)
                 if self.stop.wait(wait):
                     raise InterruptedError from None
         raise AssertionError("unreachable")
+
+    def list_activities(self, max_pages: int | None = None) -> list[dict]:
+        """Activity summaries, newest first (all of them, or the first pages)."""
+        activities, start, pages = [], 0, 0
+        while True:
+            page = self.call(self.g.get_activities, start, PAGE) or []
+            pages += 1
+            activities.extend(a for a in page if isinstance(a, dict) and a.get("activityId"))
+            self.p.message = f"{len(activities)} activities listed"
+            if len(page) < PAGE or (max_pages and pages >= max_pages):
+                return activities
+            start += PAGE
+
+
+class Backup(PacedGarmin):
+    def __init__(self, client_factory: Callable[[], Garmin], root: Path, *, health: bool = True,
+                 health_since: date | None = None, stop: threading.Event | None = None,
+                 progress: Progress | None = None, pause_s: float | None = None, today: date | None = None):
+        super().__init__(client_factory, stop=stop, progress=progress, pause_s=pause_s)
+        self.root = root
+        self.health = health
+        self.health_since = health_since
+        self.today = today or date.today()
+        self._categories: dict[int, str] = {}
 
     def _phase(self, name: str, total: int = 0) -> None:
         self.p.phase, self.p.done, self.p.total, self.p.message = name, 0, total, ""
@@ -424,16 +461,6 @@ class Backup:
                 self._categories[type_id] = node.get("typeKey") or "other"
             self._categories.setdefault(-1, "other")
         return self._categories.get(activity_type.get("typeId"), activity_type.get("typeKey") or "other")
-
-    def list_activities(self) -> list[dict]:
-        activities, start = [], 0
-        while True:
-            page = self.call(self.g.get_activities, start, PAGE) or []
-            activities.extend(a for a in page if isinstance(a, dict) and a.get("activityId"))
-            self.p.message = f"{len(activities)} activities listed"
-            if len(page) < PAGE:
-                return activities
-            start += PAGE
 
     def activity_base(self, a: dict) -> Path:
         started = str(a.get("startTimeLocal") or a.get("startTimeGMT") or "")

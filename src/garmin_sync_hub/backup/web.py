@@ -21,7 +21,7 @@ from .. import templating
 from ..auth import auth_enabled
 from ..garmin_session import GarminAuthRequired, shared_session
 from ..paths import data_dir
-from .engine import Backup, Progress, StopBackup, folder_size
+from .engine import AnyEvent, Backup, Progress, StopBackup, folder_size
 from .rclone_check import check_destination
 from .settings import BACKUP_INTERVALS, BackupSettings, backup_dir
 
@@ -113,7 +113,7 @@ class BackupModule:
         error = None
         try:
             since = date.fromisoformat(self.settings.health_since) if self.settings.health_since else None
-            stop = _AnyEvent(self._stop, self._cancel)
+            stop = AnyEvent(self._stop, self._cancel)
             Backup(self.garmin.client, self.root, health=self.settings.health, health_since=since,
                    stop=stop, progress=progress).run()
             if self.settings.rclone_remote:
@@ -343,23 +343,3 @@ def backup_autosync_line(m: BackupModule) -> str:
     s = m.summary()
     return templating.render_autosync_line(_env, s["auto"], s["last_finished"], s["next_run"],
                                            "backups run only when you click “Back up now”.")
-
-
-class _AnyEvent:
-    """Looks like a threading.Event; set when either event is set."""
-
-    def __init__(self, *events: threading.Event):
-        self.events = events
-
-    def is_set(self) -> bool:
-        return any(e.is_set() for e in self.events)
-
-    def wait(self, timeout: float | None = None) -> bool:
-        step = 1.0
-        waited = 0.0
-        while not self.is_set():
-            if timeout is not None and waited >= timeout:
-                return False
-            self.events[0].wait(step)
-            waited += step
-        return True

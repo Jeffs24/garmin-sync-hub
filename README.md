@@ -4,6 +4,7 @@ Garmin Connect automations in one self-hosted app, with one Garmin login:
 
 - **Liftosaur → Garmin**: turns your Liftosaur workouts into Garmin strength activities, with exercises, sets, reps and weights mapped to Garmin's exercise catalog; when your watch recorded the session, the sets are written into that activity, which keeps its heart rate.
 - **Zwift maps**: adds the Zwift map to the activity your watch recorded during a Zwift session, so you keep the watch's full data (heart rate, footpod, running dynamics, Training Effect) *and* get the map.
+- **Dogs**: adds your dog to every activity whose name matches a rule (for example "Dog Walk"), for your whole history and for new activities.
 - **Garmin backup**: a copy of your whole Garmin Connect account (every activity as its original FIT file, gear, account data, daily health data), updated automatically, downloadable as a zip and copied to Google Drive or elsewhere with rclone.
 
 It runs as one Docker container with a web UI:
@@ -11,6 +12,7 @@ It runs as one Docker container with a web UI:
 - **Overview**: one card per source (Garmin, Liftosaur, Zwift) with its state, what is pending and a quick action, plus the latest activity. The Garmin card checks the connection every 30 minutes (or on **Check now**) and warns a week before the Garmin sign-in expires.
 - **Activity**: everything sent to Garmin, from every source, with tabs to filter by source or show only what needs your attention (failures, pairs waiting to be merged).
 - **Liftosaur** and **Zwift**: one section per source, with its own pages.
+- **Dogs**: your dogs and the rules that add them to activities.
 - **Backup**: the Garmin account backup.
 - **Settings**: one tab per source, plus Backup.
 
@@ -72,6 +74,17 @@ Without a Zwift account, you can upload Zwift FIT files by hand: from zwift.com 
 
 Offline merge of two files: `garmin-sync-hub zwift-merge-files watch.fit zwift.fit -o merged.fit`.
 
+## Dogs
+
+Garmin Connect lets you add your dogs to an activity. **Dogs** does it for you, by activity name:
+
+1. Add your dog once to any activity in the Garmin Connect app, then click **Find my dogs**: Garmin does not give other apps the list of your dogs, so the app finds their ids on your activities (and in your backup). Give each dog a name.
+2. Add a rule: activity name *is* (or *contains*, *starts with*) "Dog Walk" → your dog. Case is ignored.
+3. **Preview past activities** lists every matching activity; **Add to N activities** updates them on Garmin Connect. Dogs already on an activity are kept, and nothing else in the activity changes.
+4. Turn on **Add to new activities** to check the latest 100 activities on a schedule.
+
+This uses the same unofficial Garmin Connect API as the rest of the app (the activity's `hasDog` and `dogProfileIds`).
+
 ## Garmin backup
 
 **Backup** saves your whole Garmin Connect account into the `garmin-backup/` folder (`/backup` in the container). Each run only adds what is new; the first one is long, because Garmin limits how fast data can be read, and an interrupted run resumes where it stopped. Turn on **Automatic backup** on the same page (once a day by default).
@@ -127,6 +140,7 @@ Everything lives in the `data/` volume (`DATA_DIR`):
 | `backup_settings.json`, `backup_state.json` | Garmin backup settings and last run |
 | `rclone.conf` | rclone connections (Google Drive…) |
 | `backup_exports/` | the latest backup zip |
+| `dogs.json` | your dogs, rules and the activities they were added to |
 
 The Garmin backup itself is in its own volume, `garmin-backup/` (`BACKUP_DIR`).
 

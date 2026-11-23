@@ -1,0 +1,85 @@
+{# Dogs: jobs (find, preview, apply), automatic tagging and the last activities tagged.
+   Refreshes itself every 2 s while a job runs. Needs the context of DogsModule ctx(). #}
+{% import "partials/ui.html" as ui %}
+{% set p = job.progress %}
+<div id="dogs-status" class="card src-dogs" style="border-top: 3px solid var(--src); margin-bottom: 16px;"
+     {% if running %}hx-get="/dogs/status" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap;">
+        <div>
+            <div style="font-size: 18px; font-weight: 700;">
+                {% set n = s.tagged.values()|select|list|length %}
+                {% if running %}{{ jobs[job.kind] }}…{% else %}{{ n }} activit{{ 'y' if n == 1 else 'ies' }} {{ 'has its' if n == 1 else 'have their' }} dog{% endif %}
+            </div>
+            {% if s.rules %}<div class="autosync-status">{{ s.rules|length }} rule{{ '' if s.rules|length == 1 else 's' }} · {{ s.dogs|length }} dog{{ '' if s.dogs|length == 1 else 's' }}</div>{% endif %}
+        </div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            {% if running %}
+            <button class="btn btn-secondary btn-sm" hx-post="/dogs/stop" hx-target="#dogs-status" hx-swap="outerHTML">Stop</button>
+            {% else %}
+            <button class="btn btn-secondary btn-sm" hx-post="/dogs/run/discover" hx-target="#dogs-status" hx-swap="outerHTML"
+                    {% if not garmin_connected %}disabled{% endif %}>Find my dogs</button>
+            {% if s.rules %}
+            <button class="btn btn-secondary btn-sm" hx-post="/dogs/run/preview" hx-target="#dogs-status" hx-swap="outerHTML"
+                    {% if not garmin_connected %}disabled{% endif %}>Preview past activities</button>
+            {% endif %}
+            {% endif %}
+        </div>
+    </div>
+
+    {% if running and p %}
+    <div style="margin-top: 12px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary);">
+        <span class="spinner"></span>
+        <span>{% if p.total %}{{ p.done }} / {{ p.total }}{% endif %}{% if p.message %} · {{ p.message }}{% endif %}</span>
+    </div>
+    {% if p.total %}<div style="margin-top: 6px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden;">
+        <div style="height: 100%; width: {{ (100 * p.done / p.total)|round|int }}%; background: var(--src);"></div></div>{% endif %}
+    {% elif job.error %}
+    <p class="state-failed" style="font-size: 13px; margin-top: 10px;">{{ job.error }}</p>
+    {% elif job.kind == "discover" and job.result %}
+    <p style="font-size: 13px; margin-top: 10px;" class="{{ 'state-ok' if job.result.found else 'state-pending' }}">
+        {% if job.result.found %}Found {{ job.result.found|length }} dog{{ '' if job.result.found|length == 1 else 's' }}
+            ({% for dog, activity in job.result.found.items() %}{{ s.dog_name(dog) }} on “{{ activity }}”{{ ', ' if not loop.last }}{% endfor %}).
+            {% if job.result.new %}Give {{ 'it' if job.result.new|length == 1 else 'them' }} a name below.{% endif %}
+        {% else %}No dog found on your latest activities. Add your dog to one activity in the Garmin Connect app, then try again.{% endif %}
+    </p>
+    {% elif job.kind == "preview" and job.result is not none %}
+    <div style="margin-top: 12px;">
+        {% if matches %}
+        <p style="font-size: 13px;">{{ matches|length }} activit{{ 'y' if matches|length == 1 else 'ies' }} to update
+            (activities that already have the dog are skipped when applying):</p>
+        <ul style="margin: 6px 0 0 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.7; max-height: 220px; overflow-y: auto;">
+            {% for a in matches[:200] %}<li>{{ a.start.replace('T', ' ') }} · {{ a.name }} → {% for d in a.dogs %}{{ s.dog_name(d) }}{{ ', ' if not loop.last }}{% endfor %}</li>{% endfor %}
+            {% if matches|length > 200 %}<li>… and {{ matches|length - 200 }} more</li>{% endif %}
+        </ul>
+        <button class="btn btn-primary btn-sm" style="margin-top: 10px;" hx-post="/dogs/run/apply" hx-target="#dogs-status" hx-swap="outerHTML"
+                hx-confirm="Add the dogs to these {{ matches|length }} activities on Garmin Connect? Dogs already on them are kept.">Add to {{ matches|length }} activit{{ 'y' if matches|length == 1 else 'ies' }}</button>
+        {% else %}
+        <p class="state-ok" style="font-size: 13px;">Nothing to do: every matching activity already has its dog.</p>
+        {% endif %}
+    </div>
+    {% elif job.kind in ("apply", "auto") and job.result is not none %}
+    <p class="state-ok" style="font-size: 13px; margin-top: 10px;">
+        Done: dog added to {{ job.result.tagged or 0 }} activit{{ 'y' if job.result.tagged == 1 else 'ies' }}{% if job.result.already %}, {{ job.result.already }} already had it{% endif %}.
+    </p>
+    {% endif %}
+    {% if p and p.warnings and not running %}
+    <details style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">
+        <summary style="cursor: pointer;">{{ p.warnings|length }} activit{{ 'y' if p.warnings|length == 1 else 'ies' }} could not be updated</summary>
+        <ul style="margin: 6px 0 0 18px;">{% for w in p.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+
+    <div class="autosync-block">
+        {{ ui.autosync_control("dogs-autosync", "/dogs/autosync", s.auto, s.interval_minutes, intervals, "Add to new activities", "the latest 100 are checked", autosync_line|safe) }}
+        {% if s.last_error %}<div class="state-failed autosync-status">Last automatic run: {{ s.last_error }}</div>{% endif %}
+    </div>
+
+    {% if s.recent %}
+    <div class="autosync-block">
+        <div class="card-title" style="margin-bottom: 6px;">Latest added</div>
+        <ul style="margin: 0 0 0 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.7;">
+            {% for a in s.recent[:10] %}<li>{{ a.start.replace('T', ' ') }} · <a href="https://connect.garmin.com/modern/activity/{{ a.id }}" target="_blank" rel="noopener">{{ a.name }} &nearr;</a> → {% for d in a.dogs %}{{ s.dog_name(d) }}{{ ', ' if not loop.last }}{% endfor %}</li>{% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+</div>
