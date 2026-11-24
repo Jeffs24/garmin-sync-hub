@@ -34,6 +34,13 @@
 {{ ui.liftosaur_tabs("/liftosaur/mappings") }}
 <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 20px;">{{ total }} Liftosaur exercises mapped to Garmin FIT categories. When you upload a workout, each exercise is translated so it displays correctly in Garmin Connect.</p>
 
+{% if imported_from_file %}
+<div class="toast toast-success" style="margin-bottom: 16px;">
+    Recovered {{ imported_from_file|length }} mapping{{ '' if imported_from_file|length == 1 else 's' }} from your old
+    <code>custom_mappings.json</code> (hidden since the first mapping saved here): {{ imported_from_file|join(', ') }}.
+    Mappings you made again here were kept.
+</div>
+{% endif %}
 {% include "partials/unmapped_card.html" %}
 
 <!-- Custom mappings section (if any exist) -->

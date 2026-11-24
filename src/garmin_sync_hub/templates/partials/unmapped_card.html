@@ -8,7 +8,7 @@
         <span class="card-title" style="margin: 0; color: var(--amber);">{{ unmapped|length }} Unmapped Exercise{{ 's' if unmapped|length != 1 }}</span>
     </div>
     <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">
-        These show as "Unknown" on Garmin. Pick a category below to map them.
+        In your Liftosaur history and not mapped: they show as "Unknown" on Garmin. Pick a category below to map them.
     </p>
     {% for name, count in unmapped %}
     <div style="border-top: 1px solid var(--border-subtle); padding: 10px 0;">

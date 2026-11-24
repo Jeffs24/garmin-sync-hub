@@ -137,12 +137,12 @@ def test_mappings_page_never_waits_for_liftosaur(client, monkeypatch):
 
     calls = []
 
-    def get_workouts(self, page=1, page_size=10):
-        calls.append(page)
-        return {"workouts": [{"exercises": [{"title": "Zorbo press"}]}], "page_count": 1}
+    def iter_history(self, page_size=200):
+        calls.append(1)
+        yield {"exercises": [{"title": "Zorbo press"}]}
 
     monkeypatch.setattr(server, "load_config", lambda: {"liftosaur_api_key": "k"})
-    monkeypatch.setattr(liftosaur.LiftosaurClient, "get_workouts", get_workouts)
+    monkeypatch.setattr(liftosaur.LiftosaurClient, "iter_history", iter_history)
     _db = db.get_db()
     _db.set_app_config(server.UNMAPPED_CACHE_KEY, {})
     try:

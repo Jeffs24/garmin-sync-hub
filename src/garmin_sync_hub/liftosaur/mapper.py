@@ -635,38 +635,57 @@ from garmin_sync_hub.paths import data_dir as _data_dir
 CUSTOM_MAPPINGS_PATH = _data_dir() / "custom_mappings.json"
 _custom_mappings: dict[str, tuple[int, int]] = {}
 _custom_loaded = False
+# Mappings recovered from the legacy JSON file at the last start (shown on the Mappings page).
+imported_from_file: list[str] = []
 
 
 def _ensure_custom_loaded() -> None:
-    """Load custom mappings from the database (or the legacy JSON file) on first use."""
+    """Load custom mappings: the database, plus the legacy custom_mappings.json.
+
+    Before 1.5.2 the JSON file was read only while the database had no mapping at all, so the first
+    mapping saved from the web page hid every mapping of the file. Both are read now: the database
+    wins for a name in both, and names only in the file are copied into the database once. The file
+    is then kept as custom_mappings.json.imported, a backup that is no longer read.
+    """
     global _custom_loaded
     if _custom_loaded:
         return
     _custom_loaded = True
 
-    # Try DB first.
+    import json
+
+    from_file: dict[str, tuple[int, int]] = {}
+    path = CUSTOM_MAPPINGS_PATH
+    if path.exists():
+        try:
+            for name, pair in json.loads(path.read_text()).items():
+                from_file[name] = (int(pair[0]), int(pair[1]))
+        except (json.JSONDecodeError, OSError, IndexError, TypeError, ValueError):
+            from_file = {}
+
     try:
         from garmin_sync_hub.db import get_db
 
         database = get_db()
-        if hasattr(database, "get_custom_mappings"):
-            for name, (cat, subcat) in database.get_custom_mappings().items():
-                _custom_mappings[name] = (cat, subcat)
-            if _custom_mappings:
-                return
+        in_db = database.get_custom_mappings() if hasattr(database, "get_custom_mappings") else None
     except Exception:
-        pass
+        database, in_db = None, None
+    if in_db is None:  # no database: the file is the store
+        _custom_mappings.update(from_file)
+        return
 
-    # Fallback: legacy JSON file
-    import json
-    path = CUSTOM_MAPPINGS_PATH
-    if path.exists():
-        try:
-            data = json.loads(path.read_text())
-            for name, pair in data.items():
-                _custom_mappings[name] = (pair[0], pair[1])
-        except (json.JSONDecodeError, OSError, IndexError):
-            pass
+    _custom_mappings.update(in_db)
+    missing = {name: pair for name, pair in from_file.items() if name not in in_db}
+    try:
+        for name, (cat, sub) in missing.items():
+            database.save_custom_mapping(name, cat, sub)
+        if from_file:
+            path.replace(path.with_name(path.name + ".imported"))
+    except Exception:  # noqa: BLE001 - keep the file to try again at the next start
+        pass
+    for name, pair in missing.items():
+        _custom_mappings[name] = pair
+    imported_from_file[:] = sorted(missing)
 
 
 def save_custom_mapping(exercise_name: str, category: int, subcategory: int) -> None:

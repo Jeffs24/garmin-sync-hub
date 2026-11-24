@@ -122,6 +122,18 @@ class LiftosaurClient:
             "total_count": total_count,
         }
 
+    def iter_history(self, page_size: int = 200):
+        """Every workout of the history, newest first, following the API's cursor (one request
+        per page_size workouts; get_workouts(page=N) walks again from the first page)."""
+        cursor: str | None = None
+        while True:
+            data = self._get_history(limit=page_size, cursor=cursor)
+            for record in data.get("records", []):
+                yield parse_history_record(record)
+            cursor = data.get("nextCursor")
+            if not data.get("hasMore") or cursor is None:
+                return
+
     def get_all_workouts(self, since_page: int = 1, page_size: int = 10) -> list[dict]:
         """Fetch all normalized workouts."""
         all_workouts: list[dict] = []

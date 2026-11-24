@@ -183,7 +183,6 @@ def _still_unmapped(items: list[tuple[str, int]]) -> list[tuple[str, int]]:
 
 UNMAPPED_CACHE_KEY = "unmapped_scan"   # {"counts": {name: n}, "at": ISO time}
 UNMAPPED_MAX_AGE = timedelta(hours=1)
-UNMAPPED_PAGES = 5                      # recent workouts scanned: 5 pages of 10
 
 
 def _cached_unmapped() -> tuple[list[tuple[str, int]] | None, bool]:
@@ -209,21 +208,17 @@ def _save_unmapped(counts: dict[str, int]) -> None:
 
 
 def _scan_unmapped() -> list[tuple[str, int]]:
-    """Ask Liftosaur for recent workouts (slow: one call per page) and cache what is unmapped."""
+    """Read the whole Liftosaur history (200 workouts per request) and cache what is unmapped."""
     from garmin_sync_hub.liftosaur.liftosaur import LiftosaurClient
     from garmin_sync_hub.liftosaur.mapper import lookup_exercise
 
     client = LiftosaurClient(api_key=load_config().get("liftosaur_api_key"))
     counts: dict[str, int] = {}
-    for pg in range(1, UNMAPPED_PAGES + 1):
-        data = client.get_workouts(page=pg, page_size=10)
-        for w in data.get("workouts", []):
-            for ex in w.get("exercises", []):
-                name = ex.get("title") or ex.get("name", "")
-                if name and lookup_exercise(name)[0] == 65534:
-                    counts[name] = counts.get(name, 0) + 1
-        if pg >= data.get("page_count", 1):
-            break
+    for w in client.iter_history():
+        for ex in w.get("exercises", []):
+            name = ex.get("title") or ex.get("name", "")
+            if name and lookup_exercise(name)[0] == 65534:
+                counts[name] = counts.get(name, 0) + 1
     _save_unmapped(counts)
     return sorted(counts.items(), key=lambda x: -x[1])
 
@@ -1069,6 +1064,7 @@ async def mappings_page(request: Request):
 
     custom_list = [(name, cat, subcat, label(cat, subcat))
                    for name, (cat, subcat) in sorted(_custom_mappings.items())]
+    from garmin_sync_hub.liftosaur.mapper import imported_from_file
 
     return _render(
         "mappings.html",
@@ -1076,6 +1072,7 @@ async def mappings_page(request: Request):
         total=len(mappings),
         custom_count=len(_custom_mappings),
         custom_list=custom_list,
+        imported_from_file=imported_from_file,
         unmapped=unmapped or [],
         unmapped_stale=not fresh,
     )
