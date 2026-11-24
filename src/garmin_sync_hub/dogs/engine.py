@@ -4,8 +4,9 @@ Garmin Connect keeps the dogs of an activity in its metadata: ``metadataDTO.hasD
 ``metadataDTO.dogProfileIds``. The web app adds a dog by sending back the whole current
 metadata with those two fields changed (PUT /activity-service/activity/{id}); doing the same
 keeps every other field (favorite, lap count…). Dogs already on an activity are kept.
-There is no list of dog profiles in the API we use: dogs are found on activities where you
-added them once in the Garmin Connect app.
+Your dogs are listed by the profile service on gcx.<domain> (the host the Connect web app uses for
+family and pet profiles), with their names. The activity details only say ``hasDog`` there, without
+the ids, so reading activities is kept as a fallback (older activities and backups can carry the ids).
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ log = logging.getLogger(__name__)
 RECENT_PAGES = 1       # automatic runs look at the 100 latest activities
 DISCOVER_LIMIT = 40    # activities read when looking for dogs
 RECENT_KEPT = 30
+PETS_PATH = "/family-api/profile-service/profile/pets"
 
 
 def dog_ids(metadata: dict | None) -> list[int]:
@@ -35,16 +37,23 @@ class DogTagger(PacedGarmin):
         super().__init__(client_factory, **kwargs)
         self.store = store
         self.matches: list[dict[str, Any]] = []   # last preview
+        self.dog_names: dict[int, str] = {}       # names from the Garmin profile, set by discover()
 
     # --- finding dogs -------------------------------------------------------
 
     def discover(self, backup_root: Path | None = None, limit: int = DISCOVER_LIMIT) -> dict[int, str]:
-        """Dog ids found on activities -> the name of one activity it is on.
+        """Dog ids -> the name of one activity it is on ("" for a dog read from the profile).
 
-        Reads the activities saved by the backup first (no request), then the latest
-        activities on Garmin Connect.
+        Reads the dogs of the Garmin profile first. Only when there are none: the activities
+        saved by the backup (no request), then the latest activities on Garmin Connect.
         """
         found: dict[int, str] = {}
+        self.p.phase = "discover"
+        for dog, name in self.profile_dogs().items():
+            self.dog_names[dog] = name
+            found.setdefault(dog, "")  # on the profile, not found through an activity
+        if found:
+            return found
         if backup_root and (backup_root / "activities").exists():
             for path in (backup_root / "activities").glob("*/*/*.json"):
                 try:
@@ -54,7 +63,6 @@ class DogTagger(PacedGarmin):
                 details = record.get("details") if isinstance(record, dict) else None
                 for dog in dog_ids((details or {}).get("metadataDTO")):
                     found.setdefault(dog, (record.get("summary") or {}).get("activityName") or path.stem)
-        self.p.phase = "discover"
         activities = self.list_activities(max_pages=1)[:limit]
         self.p.total, self.p.done = len(activities), 0
         for a in activities:
@@ -63,6 +71,28 @@ class DogTagger(PacedGarmin):
                 found.setdefault(dog, a.get("activityName") or str(a["activityId"]))
             self.p.done += 1
         return found
+
+    def profile_dogs(self) -> dict[int, str]:
+        """Active dogs of the Garmin profile -> their name. Empty when Garmin does not answer."""
+        try:
+            client = self.g.client
+            domain = getattr(client, "domain", None) or getattr(client, "_domain", None) or "garmin.com"
+            url = f"https://gcx.{domain}{PETS_PATH}"
+            response = self.call(client.request, "GET", "gcx", url, api=True)
+            pets = response.json() if hasattr(response, "json") else response
+        except (InterruptedError, StopBackup):
+            raise
+        except Exception as e:  # noqa: BLE001 - fall back to reading activities
+            log.warning("Could not read the dogs of the Garmin profile: %s", e)
+            return {}
+        dogs: dict[int, str] = {}
+        for pet in pets if isinstance(pets, list) else []:
+            if not isinstance(pet, dict) or str(pet.get("species") or "dog").lower() != "dog":
+                continue
+            if str(pet.get("status") or "active").lower() != "active" or not str(pet.get("id", "")).isdigit():
+                continue
+            dogs[int(pet["id"])] = str(pet.get("name") or pet.get("nickname") or f"Dog {pet['id']}")
+        return dogs
 
     # --- tagging --------------------------------------------------------------
 

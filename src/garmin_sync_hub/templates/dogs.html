@@ -27,9 +27,9 @@
     <div class="card-title" style="margin-bottom: 6px;">Your dogs</div>
     {% if not s.dogs %}
     <p class="form-hint" style="line-height: 1.7;">
-        Garmin does not give the list of your dogs to other apps. Add your dog once to any activity in the
-        Garmin Connect app, then click <b>Find my dogs</b>: it reads your latest activities (and your backup, if you have one)
-        and keeps the dog's id. You can also enter an id yourself.
+        Click <b>Find my dogs</b>: it reads the dogs of your Garmin profile (add them in the Garmin Connect app,
+        under your profile's dogs) with their names. If Garmin does not answer, it looks for dogs on your latest
+        activities and your backup instead. You can also enter an id yourself.
     </p>
     {% endif %}
     {% for dog_id, name in s.dogs.items() %}

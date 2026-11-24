@@ -10,6 +10,29 @@ from garmin_sync_hub.dogs.store import DogsStore, Rule
 REX, MILO = 9001, 9002
 
 
+class FakeResponse:
+    def __init__(self, body):
+        self.body = body
+
+    def json(self):
+        return self.body
+
+
+class FakeClient:
+    """garminconnect's client: request() reaches other Garmin hosts with a full URL."""
+
+    domain = "garmin.com"
+
+    def __init__(self, pets=None, error: Exception | None = None):
+        self.pets, self.error, self.urls = pets or [], error, []
+
+    def request(self, method, _domain, url, **kwargs):
+        self.urls.append((method, url))
+        if self.error:
+            raise self.error
+        return FakeResponse(self.pets)
+
+
 class FakeGarmin:
     def __init__(self, n_walks: int = 3):
         self.activities = [{"activityId": 100 + i, "activityName": "Dog Walk" if i % 2 == 0 else "Easy Run",
@@ -126,6 +149,29 @@ def test_discover_from_backup_and_latest_activities(store, tmp_path):
     assert found == {MILO: "Old walk", REX: "Dog Walk"}
 
 
+def test_discover_reads_the_dogs_of_the_profile(store, tmp_path):
+    g = FakeGarmin(n_walks=1)
+    g.client = FakeClient(pets=[
+        {"id": 589432, "name": "Torii", "species": "dog", "status": "active"},
+        {"id": 7, "name": "Mittens", "species": "cat", "status": "active"},
+        {"id": 8, "name": "Old dog", "species": "dog", "status": "inactive"},
+    ])
+    t = tagger(store, g)
+    assert t.discover(tmp_path / "backup") == {589432: ""}
+    assert t.dog_names == {589432: "Torii"}
+    assert g.client.urls == [("GET", "https://gcx.garmin.com/family-api/profile-service/profile/pets")]
+    assert g.gets == []  # activities are not read when the profile has the dogs
+
+
+def test_discover_falls_back_to_activities_when_the_profile_fails(store, tmp_path):
+    g = FakeGarmin(n_walks=1)
+    g.client = FakeClient(error=RuntimeError("403"))
+    g.metadata[100]["dogProfileIds"] = [REX]
+    t = tagger(store, g)
+    assert t.discover(tmp_path / "backup") == {REX: "Dog Walk"}
+    assert t.dog_names == {}
+
+
 def test_stop_interrupts(store):
     stop = threading.Event()
     stop.set()
@@ -158,7 +204,7 @@ def hub(tmp_path, monkeypatch):
 def test_dogs_page_flow(hub, monkeypatch):
     c, m = hub
     page = c.get("/dogs").text
-    assert "Find my dogs" in page and "does not give the list of your dogs" in page
+    assert "Find my dogs" in page and "reads the dogs of your Garmin profile" in page
     assert 'href="/dogs" class="active"' in page
 
     r = c.post("/dogs/dog", data={"dog_id": str(REX), "name": "Rex"}, follow_redirects=False)

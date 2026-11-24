@@ -68,8 +68,12 @@ class DogsModule:
                 found = tagger.discover(backup_dir())
                 new = [d for d in found if str(d) not in self.store.state.dogs]
                 for dog in new:
-                    self.store.set_dog(dog, f"Dog {dog}")
-                self.job["result"] = {"found": found, "new": new}
+                    self.store.set_dog(dog, tagger.dog_names.get(dog) or f"Dog {dog}")
+                for dog, name in tagger.dog_names.items():  # replace a placeholder name, keep a chosen one
+                    if self.store.state.dogs.get(str(dog)) == f"Dog {dog}":
+                        self.store.set_dog(dog, name)
+                self.job["result"] = {"found": found, "new": new,
+                                      "unnamed": [d for d in new if d not in tagger.dog_names]}
             elif kind == "preview":
                 self.matches = tagger.preview()
                 self.job["result"] = {"matching": len(self.matches)}

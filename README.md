@@ -78,12 +78,12 @@ Offline merge of two files: `garmin-sync-hub zwift-merge-files watch.fit zwift.f
 
 Garmin Connect lets you add your dogs to an activity. **Dogs** does it for you, by activity name:
 
-1. Add your dog once to any activity in the Garmin Connect app, then click **Find my dogs**: Garmin does not give other apps the list of your dogs, so the app finds their ids on your activities (and in your backup). Give each dog a name.
+1. Click **Find my dogs**: it reads the dogs of your Garmin profile, with their names (add your dog in the Garmin Connect app first). If Garmin does not answer, it looks for their ids on your latest activities and in your backup instead; give those dogs a name.
 2. Add a rule: activity name *is* (or *contains*, *starts with*) "Dog Walk" → your dog. Case is ignored.
 3. **Preview past activities** lists every matching activity; **Add to N activities** updates them on Garmin Connect. Dogs already on an activity are kept, and nothing else in the activity changes.
 4. Turn on **Add to new activities** to check the latest 100 activities on a schedule.
 
-This uses the same unofficial Garmin Connect API as the rest of the app (the activity's `hasDog` and `dogProfileIds`).
+This uses the same unofficial Garmin Connect API as the rest of the app: the profile's dogs (`gcx.garmin.com/family-api/profile-service/profile/pets`) and the activity's `hasDog` and `dogProfileIds`. Garmin's activity details only say `hasDog`, without the ids, which is why the dogs are read from the profile.
 
 ## Garmin backup
 

@@ -38,9 +38,9 @@
     {% elif job.kind == "discover" and job.result %}
     <p style="font-size: 13px; margin-top: 10px;" class="{{ 'state-ok' if job.result.found else 'state-pending' }}">
         {% if job.result.found %}Found {{ job.result.found|length }} dog{{ '' if job.result.found|length == 1 else 's' }}
-            ({% for dog, activity in job.result.found.items() %}{{ s.dog_name(dog) }} on “{{ activity }}”{{ ', ' if not loop.last }}{% endfor %}).
-            {% if job.result.new %}Give {{ 'it' if job.result.new|length == 1 else 'them' }} a name below.{% endif %}
-        {% else %}No dog found on your latest activities. Add your dog to one activity in the Garmin Connect app, then try again.{% endif %}
+            ({% for dog, activity in job.result.found.items() %}{{ s.dog_name(dog) }}{% if activity %} on “{{ activity }}”{% endif %}{{ ', ' if not loop.last }}{% endfor %}).
+            {% if job.result.unnamed %}Give {{ 'it' if job.result.unnamed|length == 1 else 'them' }} a name below.{% endif %}
+        {% else %}No dog found on your Garmin profile. Add your dog in the Garmin Connect app, then try again.{% endif %}
     </p>
     {% elif job.kind == "preview" and job.result is not none %}
     <div style="margin-top: 12px;">
