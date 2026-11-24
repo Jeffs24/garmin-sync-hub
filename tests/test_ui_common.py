@@ -22,23 +22,40 @@ def test_interval_labels():
         "15 min", "1 hour", "90 min", "2 hours", "24 hours"]
 
 
-def test_autosync_line_is_the_same_for_both_sources():
+def test_autoscan_line_is_the_same_for_every_source():
     last = datetime(2026, 11, 22, 10, tzinfo=timezone.utc)
-    on = server.liftosaur_autosync_line({"enabled": True, "last_at": last, "next_at": None})
+    on = server.liftosaur_autosync_line({"scan": True, "last_at": last, "next_at": None})
     assert 'datetime="2026-11-22T10:00:00Z"' in on and on.startswith("Last:")
-    off = server.liftosaur_autosync_line({"enabled": False})
-    assert off.startswith("Off:") and "not synced" in off  # new workouts still show up
+    off = server.liftosaur_autosync_line({"scan": False})
+    assert off.startswith("Off:") and "Check now" in off
+    assert templating.sync_line(True).startswith("On:") and "Not synced" in templating.sync_line(False)
 
 
-def test_liftosaur_autosync_toggle_shows_next_run(client, monkeypatch):
+def test_liftosaur_autoscan_and_autosync_switches(client, monkeypatch):
     saved = {}
-    monkeypatch.setattr(server, "load_config", lambda: {"auto_sync": dict(saved)})
-    monkeypatch.setattr(server, "save_config", lambda cfg: saved.update(cfg["auto_sync"]))
-    r = client.post("/api/toggle-autosync", data={"enabled": "true", "interval": "60"})
+    monkeypatch.setattr(server, "load_config", lambda: json.loads(json.dumps(saved)))
+    monkeypatch.setattr(server, "save_config", lambda cfg: saved.update(json.loads(json.dumps(cfg))))
+    r = client.post("/api/toggle-autoscan", data={"enabled": "true", "interval": "60"})
     assert r.status_code == 200 and "Next:" in r.text and "<time" in r.text
-    r = client.post("/api/toggle-autosync", data={"enabled": "false", "interval": "60"})
-    assert r.text.startswith("Off:")
-    assert server._autosync_timer is None
+    assert saved["auto_scan"] == {"enabled": True, "interval_minutes": 60} and server._autosync_timer is not None
+    r = client.post("/api/toggle-autoscan", data={"enabled": "false", "interval": "60"})
+    assert r.text.startswith("Off:") and server._autosync_timer is None
+    r = client.post("/api/toggle-autosync", data={"enabled": "true"})
+    assert r.text.startswith("On:") and saved["auto_sync"]["enabled"] is True
+    assert saved["auto_scan"]["enabled"] is False  # the two switches are separate
+
+
+def test_old_liftosaur_auto_sync_keeps_working(tmp_path, monkeypatch):
+    """Before 1.6 one switch did both: scans keep its interval, auto-sync keeps its on/off."""
+    from garmin_sync_hub import config as cfgmod
+
+    path = tmp_path / "liftosaur.json"
+    monkeypatch.setattr(cfgmod, "CONFIG_FILE", path)
+    monkeypatch.setattr(cfgmod, "CONFIG_DIR", tmp_path)
+    path.write_text(json.dumps({"auto_sync": {"enabled": True, "interval_minutes": 60}}))
+    cfg = cfgmod.load_config()
+    assert cfg["auto_scan"] == {"enabled": True, "interval_minutes": 60} and cfg["auto_sync"]["enabled"] is True
+    assert json.loads(path.read_text())["auto_scan"]["interval_minutes"] == 60  # saved once
 
 
 def test_settings_save_shows_a_notice(client, monkeypatch):
@@ -215,12 +232,12 @@ def test_old_zwift_env_values_are_imported_once(tmp_path, monkeypatch):
 
     monkeypatch.setattr(zcfg, "data_dir", lambda: tmp_path)
     monkeypatch.setenv("ZWIFT_AUTO_MERGE", "true")
-    monkeypatch.setenv("ZWIFT_SCAN_DAYS", "14")
+    monkeypatch.setenv("ZWIFT_SCAN_INTERVAL_MINUTES", "60")
     cfg = zcfg.Config.load()
-    assert cfg.auto_merge is True and cfg.scan_days == 14
-    assert json.loads((tmp_path / "zwift_settings.json").read_text())["scan_days"] == 14
-    monkeypatch.setenv("ZWIFT_SCAN_DAYS", "30")  # once saved, the file wins
-    assert zcfg.Config.load().scan_days == 14
+    assert cfg.auto_merge is True and cfg.scan_interval_minutes == 60
+    assert json.loads((tmp_path / "zwift_settings.json").read_text())["scan_interval_minutes"] == 60
+    monkeypatch.setenv("ZWIFT_SCAN_INTERVAL_MINUTES", "120")  # once saved, the file wins
+    assert zcfg.Config.load().scan_interval_minutes == 60
 
 
 def test_defaults_without_env_or_file(tmp_path, monkeypatch):

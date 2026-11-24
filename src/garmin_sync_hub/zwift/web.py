@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 import threading
 from datetime import datetime, timedelta, timezone
@@ -89,17 +90,14 @@ def svg_chart(name: str, points: list[tuple[float, float]], invert: bool = False
 
 
 def autosync_status(m: "ZwiftModule") -> str:
-    """One line under the auto-sync switch: last and next check (same macro as Liftosaur).
-    New pairs are always looked for; auto-sync only decides whether they are merged too."""
+    """The line under the auto-scan switch: last and next scan (same macro as the other sources)."""
     if m.state.get("syncing"):
-        return "Checking now…"
+        return "Scanning now…"
     return templating.render_autosync_line(
-        _env, m.cfg.auto_merge, m.state["last_scan"], m.state["next_scan"],
-        f"new pairs are still found every {templating.interval_label(m.cfg.scan_interval_minutes)} "
-        "and wait in “Not synced” for a click on Merge.")
+        _env, m.cfg.auto_scan, m.state["last_scan"], m.state["next_scan"], templating.SCAN_OFF_HINT)
 
 
-# Zwift started in 2014: "Check now" looks that far back.
+# Zwift started in 2014: "Check now", and the first automatic scan, look that far back.
 HISTORY_START = datetime(2014, 1, 1, tzinfo=timezone.utc)
 
 
@@ -148,15 +146,33 @@ class ZwiftModule:
             zs["finished_at"] = datetime.now(timezone.utc)
             self._sync_lock.release()
 
+    # When the last scan that worked ran, kept across restarts: the next automatic scan starts there.
+    def _scan_file(self):
+        return self.cfg.data_dir / "zwift_scan.json"
+
+    def last_ok_scan(self) -> datetime | None:
+        try:
+            return templating.fromiso(json.loads(self._scan_file().read_text()).get("last_ok"))
+        except (OSError, ValueError, AttributeError):
+            return None
+
+    def _save_ok_scan(self, when: datetime) -> None:
+        try:
+            self._scan_file().parent.mkdir(parents=True, exist_ok=True)
+            self._scan_file().write_text(json.dumps({"last_ok": when.isoformat(timespec="seconds")}))
+        except OSError as e:
+            log.warning("Could not save the time of the last Zwift scan: %s", e)
+
     def _loop(self) -> None:
         while not self._stop.is_set():
-            self.run_scan()  # always look for new pairs; auto-sync decides whether they are merged
+            if self.cfg.auto_scan:
+                self.run_scan()
             self._wait_for_next_scan()
 
     def run_scan(self, full: bool = False) -> bool:
-        """One check: find pairs and fetch new Zwift rides. Scheduled: the recent period, then
-        merge when auto-sync is on. full ("Check now"): the whole history, merging nothing.
-        False when a check is already running."""
+        """One scan: find pairs and fetch the Zwift files; then, with auto-sync on, merge what was
+        found. Automatic: since the last scan that worked (minus a margin), or the whole history
+        the first time. full ("Check now"): the whole history. False when a scan is already running."""
         if not self._scan_lock.acquire(blocking=False):
             return False
         now = datetime.now(timezone.utc)
@@ -165,12 +181,12 @@ class ZwiftModule:
         try:
             if not self.garmin.has_tokens():
                 return True
-            since = HISTORY_START if full else now - timedelta(days=self.cfg.scan_days)
+            since = HISTORY_START if full else (templating.scan_since(self.last_ok_scan()) or HISTORY_START)
             self.service.scan(days=(now - since).days + 1)
             if self.zwift.connected() and self.cfg.zwift_auto_sync:
                 self.zwift_sync(since)
-            if not full:
-                self.service.merge_pending()  # only when auto-sync is on
+            self._save_ok_scan(now)
+            self.service.merge_pending()  # only when auto-sync is on
             self.state["last_error"] = None
         except Exception as e:  # noqa: BLE001
             log.exception("Zwift scan failed")
@@ -181,15 +197,17 @@ class ZwiftModule:
         return True
 
     def check_now(self) -> bool:
-        """Start a check of the whole history in the background ("Check now"): new pairs show
-        up as not synced. False when a check is already running."""
+        """Check now: scan the whole history in the background. New pairs show up as not synced
+        (merged too with auto-sync on). False when a scan is already running."""
         if self._scan_lock.locked():
             return False
         threading.Thread(target=self.run_scan, kwargs={"full": True}, name="zwift-check-now", daemon=True).start()
         return True
 
-    def _due(self) -> datetime:
-        """When the next automatic check runs (always: auto-sync only decides the merge)."""
+    def _due(self) -> datetime | None:
+        """When the next automatic scan runs, or None when auto-scan is off."""
+        if not self.cfg.auto_scan:
+            return None
         last = self.state["last_scan"]
         if last is None:
             return datetime.now(timezone.utc)
@@ -240,6 +258,7 @@ class ZwiftModule:
             "failed": sum(1 for r in rows if r["status"] == "failed"),
             "zwift_connected": self.zwift.connected(),
             "auto_merge": self.cfg.auto_merge,  # auto-sync: pairs found are merged without a click
+            "auto_scan": self.cfg.auto_scan,
             "scan_interval_minutes": self.cfg.scan_interval_minutes,
             "last_scan": self.state["last_scan"],
             "next_scan": self.state["next_scan"],
@@ -260,7 +279,7 @@ class ZwiftModule:
 
         def pair_ctx() -> dict:
             return {"status_labels": STATUS_LABELS, "status_states": STATUS_STATES,
-                    "can_restore": m.service.can_restore, "auto_retry": m.cfg.auto_merge,
+                    "can_restore": m.service.can_restore, "auto_retry": m.cfg.auto_merge and m.cfg.auto_scan,
                     "max_attempts": retry.MAX_ATTEMPTS, "parse_time": retry.parse}
 
         def render_page(request: Request) -> HTMLResponse:
@@ -285,7 +304,8 @@ class ZwiftModule:
                 merged=sum(1 for r in all_rows if r["status"] == "merged"), last_scan=m.state["last_scan"],
                 garmin_connected=m.garmin.has_tokens(), zwift_connected=m.zwift.connected(),
                 zs=m.state["zwift"], last_error=m.state["last_error"],
-                scan_intervals=SCAN_INTERVALS, autosync_status=autosync_status(m), **pair_ctx(),
+                scan_intervals=SCAN_INTERVALS, autosync_status=autosync_status(m),
+                sync_line=templating.sync_line(m.cfg.auto_merge), **pair_ctx(),
             )
 
         def render_row(request: Request, target_id: int) -> HTMLResponse:
@@ -353,19 +373,28 @@ class ZwiftModule:
             m.settings_changed()
             return RedirectResponse("/settings?saved=zwift#zwift", status_code=303)
 
-        @router.post("/autosync", response_class=HTMLResponse)
-        def autosync(enabled: str = Form("false"), interval: str = Form("")) -> HTMLResponse:
-            """Auto-sync on: the pairs found are merged without a click. The check runs either way."""
-            values: dict = {"auto_merge": enabled}
-            if interval:
-                values["scan_interval_minutes"] = interval
+        def save(values: dict) -> str | None:
             try:
                 m.cfg.update(values)
                 m.cfg.save()
             except (ValueError, OSError) as e:
-                return HTMLResponse(f"<span class='state-failed'>{html.escape(str(e))}</span>")
+                return f"<span class='state-failed'>{html.escape(str(e))}</span>"
             m.settings_changed()
-            return HTMLResponse(autosync_status(m))
+            return None
+
+        @router.post("/autoscan", response_class=HTMLResponse)
+        def autoscan(enabled: str = Form("false"), interval: str = Form("")) -> HTMLResponse:
+            """Auto-scan switch and interval: look for new pairs on a schedule."""
+            values: dict = {"auto_scan": enabled}
+            if interval:
+                values["scan_interval_minutes"] = interval
+            return HTMLResponse(save(values) or autosync_status(m))
+
+        @router.post("/autosync", response_class=HTMLResponse)
+        def autosync(enabled: str = Form("false")) -> HTMLResponse:
+            """Auto-sync switch: merge the pairs a scan finds without a click."""
+            error = save({"auto_merge": enabled})
+            return HTMLResponse(error or templating.sync_line(m.cfg.auto_merge))
 
         @router.post("/upload")
         async def upload(files: list[UploadFile] = File(...)) -> RedirectResponse:

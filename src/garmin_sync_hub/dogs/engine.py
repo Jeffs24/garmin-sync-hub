@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .. import retry
+from .. import retry, templating
 from ..backup.engine import PacedGarmin, StopBackup
 from .store import MAX_DOGS_PER_ACTIVITY, DogsStore
 
@@ -143,12 +143,14 @@ class DogTagger(PacedGarmin):
         return self.matches
 
     def check(self, full: bool = False) -> list[dict[str, Any]]:
-        """Find the activities that miss their dog, without changing Garmin: they show up as not
-        synced on the Dogs page. full: the whole history ("Check now"); otherwise the latest ones."""
+        """Scan: find the activities that miss their dog, without changing Garmin: they show up as
+        not synced on the Dogs page. full ("Check now", or the first scan): the whole history;
+        otherwise back to the last scan that worked, minus a margin."""
         self.p.phase = "check"
-        activities = self.list_activities(max_pages=None if full else RECENT_PAGES)
-        found = self.candidates(activities)
         state = self.store.state
+        since = None if full else templating.scan_since(state.last_check)
+        activities = self.list_activities(since=since.strftime("%Y-%m-%d") if since else None)
+        found = self.candidates(activities)
         checked = {int(a["activityId"]) for a in activities}
         # What was not looked at this time stays; what was is replaced by what was found.
         state.pending = found + [p for p in state.pending if p["id"] not in checked]

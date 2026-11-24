@@ -254,6 +254,25 @@ def test_check_finds_missing_dogs_even_with_auto_sync_off(store):
     assert store.state.pending == [] and len(g.puts) == 2
 
 
+def test_automatic_scan_looks_back_to_the_last_one(store):
+    """The first scan reads the whole history; the next ones stop at the last scan minus 3 days."""
+    from datetime import date, timedelta
+
+    g = FakeGarmin(n_walks=0)
+    day0 = date(2026, 11, 20)
+    g.activities = [{"activityId": 1000 + i, "activityName": "Dog Walk",
+                     "startTimeLocal": f"{day0 - timedelta(days=i)} 08:00:00"} for i in range(150)]  # newest first
+    g.metadata = {a["activityId"]: {} for a in g.activities}
+    t = tagger(store, g)
+    t.check()
+    assert len(g.list_calls) == 3 and len(store.state.pending) == 150  # first scan: every page (100 + 50 + end)
+    store.state.last_check = "2026-11-20T12:00:00+00:00"
+    g.list_calls.clear()
+    found = t.check()
+    assert len(g.list_calls) == 1 and {a["id"] for a in found} == {1000, 1001, 1002, 1003}  # 17th to 20th
+    assert len(store.state.pending) == 150  # what was not looked at again stays
+
+
 def test_dogs_page_flow(hub, monkeypatch):
     c, m = hub
     page = c.get("/dogs").text
@@ -286,8 +305,12 @@ def test_dogs_page_flow(hub, monkeypatch):
     assert "Done: dog added to 3 activities" in page and "3 activities have their dog" in page
     assert "connect.garmin.com/modern/activity/104" in page and m.store.state.pending == []
 
-    r = c.post("/dogs/autosync", data={"enabled": "true", "interval": "60"})
-    assert "Next:" in r.text and m.store.state.auto is True
+    r = c.post("/dogs/autoscan", data={"enabled": "true", "interval": "60"})
+    assert "Next:" in r.text and m.store.state.scan is True and m.store.state.interval_minutes == 60
+    r = c.post("/dogs/autosync", data={"enabled": "true"})
+    assert r.text.startswith("On:") and m.store.state.auto is True
+    r = c.post("/dogs/autoscan", data={"enabled": "false", "interval": "60"})
+    assert r.text.startswith("Off:") and m._due() is None and m.store.state.auto is True
 
 
 def test_jobs_need_garmin_and_rules(hub, monkeypatch):

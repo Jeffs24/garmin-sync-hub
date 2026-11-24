@@ -25,7 +25,7 @@
         <div class="source-meta">
             {% if lift.last_run %}Last sync <time data-local data-time datetime="{{ lift.last_run.time|replace(' ', 'T') }}Z"></time> · {% endif %}
             {% if lift.failed %}<a href="/activity?source=attention" class="state-failed">{{ lift.failed }} failed</a> · {% endif %}
-            {% if lift.auto_sync.enabled %}Auto-sync every {{ lift.auto_sync.interval_minutes|interval_label }}{% if lift.auto_sync.next_at %} · next <time data-local data-time datetime="{{ lift.auto_sync.next_at.isoformat() }}"></time>{% endif %}{% else %}Auto-sync off{% endif %}
+            {{ ui.scan_sync_meta(lift.auto_sync.scan, lift.auto_sync.interval_minutes, lift.auto_sync.next_at, lift.auto_sync.enabled) }}
         </div>
         <div class="source-actions">
             <button id="sync-now-btn" class="btn btn-primary btn-sm" onclick="syncNow()" {% if not garmin_connected %}title="Connect Garmin first"{% endif %}{% if not lift.pending %} disabled{% endif %}>Sync all ({{ lift.pending }})</button>
@@ -53,7 +53,7 @@
             {% if zwift.last_scan %}Last sync <time data-local data-time datetime="{{ zwift.last_scan.isoformat() }}"></time> · {% endif %}
             {% if zwift.failed %}<a href="/activity?source=attention" class="state-failed">{{ zwift.failed }} failed</a> · {% endif %}
             {% if zwift.busy %}<span class="state-pending">{{ zwift.busy }} in progress</span> · {% endif %}
-            {% if zwift.auto_merge %}Auto-sync every {{ zwift.scan_interval_minutes|interval_label }}{% else %}Auto-sync off (checks every {{ zwift.scan_interval_minutes|interval_label }}){% endif %}{% if zwift.next_scan %} · next check <time data-local data-time datetime="{{ zwift.next_scan.isoformat() }}"></time>{% endif %}
+            {{ ui.scan_sync_meta(zwift.auto_scan, zwift.scan_interval_minutes, zwift.next_scan, zwift.auto_merge) }}
             · Zwift account {{ 'connected' if zwift.zwift_connected else 'not connected' }}
         </div>
         {% if zwift.last_error %}<div class="source-meta state-failed">Last sync: {{ zwift.last_error }}</div>{% endif %}
@@ -79,7 +79,7 @@
             {% if dogs.last_run %}Last sync <time data-local data-time datetime="{{ dogs.last_run.isoformat() }}"></time> · {% endif %}
             {% if dogs.failed %}<a href="/activity?source=attention" class="state-failed">{{ dogs.failed }} failed</a> · {% endif %}
             {% if dogs.dogs %}{{ dogs.dog_names|join(', ') }} · {{ dogs.rules }} rule{{ '' if dogs.rules == 1 else 's' }} · {% endif %}
-            {% if dogs.auto %}Auto-sync every {{ dogs.interval_minutes|interval_label }}{% else %}Auto-sync off{% endif %}{% if dogs.next_run %} · next check <time data-local data-time datetime="{{ dogs.next_run.isoformat() }}"></time>{% endif %}
+            {{ ui.scan_sync_meta(dogs.scan, dogs.interval_minutes, dogs.next_run, dogs.auto) }}
         </div>
         {% if dogs.last_error %}<div class="source-meta state-failed">Last run: {{ dogs.last_error }}</div>{% endif %}
         <div class="source-actions">

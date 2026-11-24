@@ -111,9 +111,12 @@ class DogsModule:
             elif kind == "preview":
                 self.matches = tagger.preview()
                 self.job["result"] = {"matching": len(self.matches), **tagger.scan}
-            elif kind == "check":
+            elif kind == "check":  # Check now: a scan of the whole history, then auto-sync if on
                 found = tagger.check(full=True)
                 self.job["result"] = {"missing": len(found), **tagger.scan}
+                if self.store.state.auto and found:
+                    tagger.sync_pending()
+                    self.job["result"].update(progress.counts)
             elif kind == "sync":
                 tagger.sync_pending()
                 self.job["result"] = dict(progress.counts)
@@ -149,10 +152,9 @@ class DogsModule:
     # --- schedule -----------------------------------------------------------
 
     def _due(self) -> datetime | None:
-        """Next automatic check: always once there are rules (auto-sync only decides whether
-        the dogs are added too)."""
+        """Next automatic scan, or None when auto-scan is off (or there is no rule yet)."""
         s = self.store.state
-        if not s.rules:
+        if not s.scan or not s.rules:
             return None
         times = [datetime.fromisoformat(t) for t in (s.last_run, s.last_check) if t]
         last = max(times) if times else None
@@ -187,19 +189,21 @@ class DogsModule:
             "tagged": sum(1 for v in s.tagged.values() if v),
             "pending": len(s.pending),
             "failed": sum(1 for e in s.recent if not e.get("ok", True)),
-            "auto": s.auto and bool(s.rules), "interval_minutes": s.interval_minutes,
+            "auto": s.auto and bool(s.rules), "scan": s.scan and bool(s.rules), "interval_minutes": s.interval_minutes,
             "next_run": self._due(), "running": self.running, "last_error": s.last_error,
             "last_run": datetime.fromisoformat(s.last_run) if s.last_run else None,
         }
 
     def autosync_line(self) -> str:
-        """The line under the auto-sync switch (Dogs page and Settings → Dogs)."""
+        """The line under the auto-scan switch (Dogs page and Settings → Dogs)."""
         s = self.store.state
-        last = datetime.fromisoformat(s.last_run) if s.last_run else None
+        last = datetime.fromisoformat(s.last_check) if s.last_check else None
         return templating.render_autosync_line(
-            _env, s.auto and bool(s.rules), last, self._due(),
-            f"activities missing their dog are still found every {templating.interval_label(s.interval_minutes)} "
-            "and wait in “Not synced” for a click." if s.rules else "add a rule first (Settings → Dogs).")
+            _env, s.scan and bool(s.rules), last, self._due(),
+            templating.SCAN_OFF_HINT if s.rules else "add a rule first (Settings → Dogs).")
+
+    def sync_line(self) -> str:
+        return templating.sync_line(self.store.state.auto)
 
     # --- routes -------------------------------------------------------------
 
@@ -209,7 +213,7 @@ class DogsModule:
 
         def ctx() -> dict:
             return {"s": m.store.state, "job": m.job, "jobs": JOBS, "running": m.running, "matches": m.matches,
-                    "match_modes": MATCH_MODES, "intervals": DOG_INTERVALS, "autosync_line": m.autosync_line(),
+                    "match_modes": MATCH_MODES, "intervals": DOG_INTERVALS, "autosync_line": m.autosync_line(), "sync_line": m.sync_line(),
                     "garmin_connected": m.garmin.has_tokens()}
 
         def back(error: str | None = None, saved: bool = False, to: str = "") -> RedirectResponse:
@@ -350,16 +354,23 @@ class DogsModule:
             m.matches = []
             return back(saved=True, to=next)
 
-        @router.post("/autosync", response_class=HTMLResponse)
-        def autosync(enabled: str = Form("false"), interval: str = Form("")) -> HTMLResponse:
+        @router.post("/autoscan", response_class=HTMLResponse)
+        def autoscan(enabled: str = Form("false"), interval: str = Form("")) -> HTMLResponse:
+            """Auto-scan switch and interval: look for activities missing their dog on a schedule."""
             try:
-                m.store.set_auto(enabled in ("true", "True", "1", "on"), int(interval) if interval else None)
+                m.store.set_scan(enabled in ("true", "True", "1", "on"), int(interval) if interval else None)
             except ValueError as e:
                 return HTMLResponse(f"<span class='state-failed'>{html.escape(str(e))}</span>")
             m._wake.set()
             return HTMLResponse(m.autosync_line())
 
-        for path in ("/dog", "/rules", "/stop", "/autosync"):
+        @router.post("/autosync", response_class=HTMLResponse)
+        def autosync(enabled: str = Form("false")) -> HTMLResponse:
+            """Auto-sync switch: add the dogs a scan finds without a click."""
+            m.store.set_auto(enabled in ("true", "True", "1", "on"))
+            return HTMLResponse(m.sync_line())
+
+        for path in ("/dog", "/rules", "/stop", "/autoscan", "/autosync"):
             router.add_api_route(path, lambda: RedirectResponse("/dogs", status_code=303),
                                  methods=["GET"], include_in_schema=False)
         return router

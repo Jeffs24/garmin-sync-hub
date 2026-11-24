@@ -30,6 +30,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "default_limit": 10,
         "skip_existing": True,
     },
+    # Auto-scan: read Liftosaur at this interval; new workouts show up as not synced.
+    "auto_scan": {
+        "enabled": True,
+        "interval_minutes": 120,
+    },
+    # Auto-sync: send what a scan finds to Garmin (it follows the scans: no interval of its own;
+    # interval_minutes is the scan interval of before 1.6, read once to fill auto_scan).
     "auto_sync": {
         "enabled": False,
         "interval_minutes": 120,
@@ -79,6 +86,12 @@ def load_config() -> dict[str, Any]:
             if "garmin_password" in saved:
                 # Before 1.2.0, GARMIN_PASSWORD from .env could be saved here in clear text.
                 saved.pop("garmin_password", None)
+                migrated = True
+            if "auto_scan" not in saved and isinstance(saved.get("auto_sync"), dict):
+                # Before 1.6 one switch did both: scans now always run at its interval, and
+                # auto-sync keeps its on/off (so nothing changes for someone who had it on).
+                saved["auto_scan"] = {"enabled": True,
+                                      "interval_minutes": saved["auto_sync"].get("interval_minutes", 120)}
                 migrated = True
             _deep_merge(config, saved)
         except (json.JSONDecodeError, OSError) as e:

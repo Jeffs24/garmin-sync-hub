@@ -239,44 +239,56 @@ def _get_unmapped_exercises(fetch: bool = True) -> list[tuple[str, int]]:
         return cached or []
 
 
-def _run_autosync() -> None:
-    """Execute a sync and reschedule if still enabled."""
-    global _last_sync_time
-    config = load_config()
-    auto_cfg = config.get("auto_sync", {})
-    if not auto_cfg.get("enabled", False):
-        return
+def _liftosaur_scan(config: dict[str, Any]) -> int:
+    """Scan: read Liftosaur again (the saved lists are forgotten), so new workouts show up as
+    not synced. Returns the number of workouts in Liftosaur. Nothing changes on Garmin."""
+    from garmin_sync_hub.liftosaur.liftosaur import LiftosaurClient
 
+    _clear_workout_pages()
+    _db = db.get_db()
+    _db.set_app_config(ALL_WORKOUTS_KEY, {})
+    total = LiftosaurClient(api_key=config.get("liftosaur_api_key")).get_workout_count()
+    _db.set_app_config("workout_total", {"count": total, "at": datetime.now(timezone.utc).isoformat()})
+    return total
+
+
+def _liftosaur_sync_found(trigger: str) -> dict:
+    """Auto-sync: send the workouts not synced to Garmin (failed ones wait for their next try)."""
     if not _acquire_sync_lock():
         logger.info("Auto-sync: skipped — another sync is running")
-        _schedule_autosync(auto_cfg.get("interval_minutes", 30))
-        return
-
-    logger.info("Auto-sync: running scheduled sync")
-    liftosaur_auth_failed = False
+        return {"synced": 0, "skipped": 0, "failed": 0}
     try:
-        # Failed workouts wait for their retry time (30 min, 2 h, 8 h, then a click).
-        result = sync(limit=10, dry_run=False, skip_ids=db.get_db().failures_on_hold())
-    except Exception as e:
-        from garmin_sync_hub.liftosaur.liftosaur import LiftosaurAuthError
-
-        if isinstance(e, LiftosaurAuthError):
-            logger.error("Auto-sync: Liftosaur API key invalid — disabling auto-sync. %s", e)
-            config["auto_sync"]["enabled"] = False
-            save_config(config)
-            liftosaur_auth_failed = True
-        result = {"synced": 0, "skipped": 0, "failed": 1, "error": str(e)}
+        result = sync(fetch_all=True, dry_run=False, skip_ids=db.get_db().failures_on_hold())
     finally:
         _sync_executing.release()
+    _record_sync_log(result, trigger=trigger)
+    return result
 
-    if liftosaur_auth_failed:
-        return  # Don't reschedule
 
+def _run_autosync() -> None:
+    """The automatic run: scan Liftosaur, sync what it found when auto-sync is on, reschedule."""
+    global _last_sync_time
+    from garmin_sync_hub.liftosaur.liftosaur import LiftosaurAuthError
+
+    config = load_config()
+    scan_cfg = config.get("auto_scan", {})
+    if not scan_cfg.get("enabled", False):
+        return
+    logger.info("Auto-scan: reading Liftosaur")
+    try:
+        _liftosaur_scan(config)
+        if config.get("auto_sync", {}).get("enabled"):
+            _liftosaur_sync_found("auto")
+    except LiftosaurAuthError as e:
+        logger.error("Auto-scan: Liftosaur API key invalid — turning auto-scan off. %s", e)
+        config["auto_scan"]["enabled"] = False
+        save_config(config)
+        return  # don't reschedule
+    except Exception as e:  # noqa: BLE001 - the next run tries again
+        logger.warning("Auto-scan failed: %s", e)
+        _record_sync_log({"synced": 0, "skipped": 0, "failed": 1}, trigger="auto")
     _last_sync_time = datetime.now(timezone.utc)
-    _record_sync_log(result, trigger="auto")
-
-    # Reschedule
-    _schedule_autosync(auto_cfg.get("interval_minutes", 30))
+    _schedule_autosync(scan_cfg.get("interval_minutes", 120))
 
 
 def _schedule_autosync(interval_minutes: int) -> None:
@@ -352,25 +364,25 @@ def _with_notice(request: Request, key: str, anchor: str = "") -> str:
 
 
 def liftosaur_autosync_line(status: dict[str, Any]) -> str:
-    """The line under the Liftosaur auto-sync switch (same macro as Zwift)."""
+    """The line under the Liftosaur auto-scan switch (same macro as the other sources)."""
     return templating.render_autosync_line(
-        _jinja_env, status["enabled"], status.get("last_at"), status.get("next_at"),
-        "new workouts show up as not synced and wait for a click on Sync.")
+        _jinja_env, status["scan"], status.get("last_at"), status.get("next_at"), templating.SCAN_OFF_HINT)
 
 
 def _get_autosync_status() -> dict[str, Any]:
-    """Build auto-sync status dict for templates."""
+    """Auto-scan and auto-sync of Liftosaur for the templates. "enabled" is auto-sync,
+    "scan" auto-scan, "interval_minutes" the scan interval."""
     config = load_config()
-    auto_cfg = config.get("auto_sync", {})
-    enabled = auto_cfg.get("enabled", False)
-    interval = auto_cfg.get("interval_minutes", 30)
+    scan_cfg = config.get("auto_scan", {})
+    scan = bool(scan_cfg.get("enabled", False))
 
     # Times are shown in the viewer's time zone by the templates.
     return {
-        "enabled": enabled,
-        "interval_minutes": interval,
+        "enabled": bool(config.get("auto_sync", {}).get("enabled", False)),
+        "scan": scan,
+        "interval_minutes": scan_cfg.get("interval_minutes", 120),
         "last_at": _last_sync_time,
-        "next_at": _autosync_next[0] if enabled else None,
+        "next_at": _autosync_next[0] if scan else None,
     }
 
 
@@ -402,10 +414,11 @@ def _start_background_jobs() -> None:
     _garmin_check_stop.clear()
     threading.Thread(target=_garmin_health_loop, name="garmin-check", daemon=True).start()
     config = load_config()
-    auto_cfg = config.get("auto_sync", {})
-    if auto_cfg.get("enabled", False):
-        interval = auto_cfg.get("interval_minutes", 30)
-        logger.info("Auto-sync enabled on startup: every %d min", interval)
+    scan_cfg = config.get("auto_scan", {})
+    if scan_cfg.get("enabled", False):
+        interval = scan_cfg.get("interval_minutes", 120)
+        logger.info("Liftosaur auto-scan on startup: every %d min (auto-sync %s)", interval,
+                    "on" if config.get("auto_sync", {}).get("enabled") else "off")
         _schedule_autosync(interval)
 
 
@@ -552,6 +565,7 @@ def _liftosaur_summary(config: dict) -> dict[str, Any]:
         "failed": len(db.get_db().get_failures()),
         "auto_sync": auto_sync,
         "autosync_line": liftosaur_autosync_line(auto_sync),
+        "sync_line": templating.sync_line(auto_sync["enabled"]),
         "autosync_intervals": _VALID_AUTOSYNC_INTERVALS,
         "last_run": sync_log[0] if sync_log else None,
     }
@@ -566,7 +580,7 @@ def _activity_feed() -> list:
     # A retry time only means something while the automation that retries is on.
     retrying = {
         "liftosaur": bool(load_config().get("auto_sync", {}).get("enabled")),
-        "zwift": zwift_module.cfg.auto_merge,
+        "zwift": zwift_module.cfg.auto_merge and zwift_module.cfg.auto_scan,
         "dogs": dogs_module.store.state.auto,
         "backup": backup_module.settings.auto,
     }
@@ -946,13 +960,13 @@ def _liftosaur_flow(config: dict[str, Any]) -> dict[str, Any]:
 
     _ensure_custom_loaded()
     update_existing, match_window = get_update_existing(config)
-    auto = config.get("auto_sync", {})
+    scan = config.get("auto_scan", {})
     timing = config.get("timing", {})
     return {
         "update_existing": update_existing,
         "match_window": match_window,
-        "auto_sync": bool(auto.get("enabled")),
-        "interval": auto.get("interval_minutes", 120),
+        "auto_sync": bool(scan.get("enabled")),  # the drawing shows when workouts are read
+        "interval": scan.get("interval_minutes", 120),
         "mapping_count": len(set(EXERCISE_TO_GARMIN) | set(_custom_mappings)),
         "working_set": timing.get("working_set_seconds", 40),
         "rest_sets": timing.get("rest_between_sets_seconds", 75),
@@ -1195,6 +1209,7 @@ async def settings_page(request: Request):
         zwift_upload_results=upload_results,
         dogs_intervals=DOG_INTERVALS, dogs_autosync_line=dogs_module.autosync_line(),
         backup_intervals=BACKUP_INTERVALS, backup_autosync_line=backup_autosync_line(backup_module),
+        sync_line=templating.sync_line,
         zwift_cfg=zwift_module.cfg,
         zwift_connected=zwift_module.zwift.connected(),
         backup_settings=backup_module.settings,
@@ -1545,12 +1560,16 @@ async def api_undo_workout(request: Request, workout_id: str):
 
 @app.post("/api/liftosaur/check")
 async def api_liftosaur_check(request: Request):
-    """Check now: forget the saved Liftosaur lists and counts, so the page reads them again.
-    New workouts then show up as not synced. Nothing changes on Garmin."""
+    """Check now: a scan. The saved Liftosaur lists and counts are forgotten, so the page reads
+    them again and new workouts show up as not synced. With auto-sync on, they are then sent to
+    Garmin, like after an automatic scan."""
     _clear_workout_pages()
     _db = db.get_db()
     _db.set_app_config("workout_total", {})
     _db.set_app_config(ALL_WORKOUTS_KEY, {})
+    if load_config().get("auto_sync", {}).get("enabled"):
+        threading.Thread(target=_liftosaur_sync_found, args=("manual (check)",), name="liftosaur-sync-found",
+                         daemon=True).start()
     return HTMLResponse("", headers={"HX-Refresh": "true"})
 
 
@@ -1664,27 +1683,37 @@ async def api_unsync_all(request: Request):
     return JSONResponse({"ok": True, "count": count})
 
 
-@app.post("/api/toggle-autosync", response_class=HTMLResponse)
-async def api_toggle_autosync(request: Request):
+@app.post("/api/toggle-autoscan", response_class=HTMLResponse)
+async def api_toggle_autoscan(request: Request):
+    """Auto-scan switch and interval: read Liftosaur on a schedule (new workouts: not synced)."""
     form = await request.form()
-    enabled_raw = form.get("enabled", "false")
-    enabled = enabled_raw in ("true", "True", "1", True)
+    enabled = form.get("enabled", "false") in ("true", "True", "1", True)
     interval = _parse_autosync_interval(form.get("interval", 120))
 
     config = load_config()
-    config.setdefault("auto_sync", {})
-    config["auto_sync"]["enabled"] = enabled
-    config["auto_sync"]["interval_minutes"] = interval
+    config["auto_scan"] = {"enabled": enabled, "interval_minutes": interval}
     save_config(config)
 
     if enabled:
         _schedule_autosync(interval)
-        logger.info("Auto-sync enabled: every %d min", interval)
+        logger.info("Liftosaur auto-scan on: every %d min", interval)
     else:
         _stop_autosync()
-        logger.info("Auto-sync disabled")
+        logger.info("Liftosaur auto-scan off")
 
     return HTMLResponse(liftosaur_autosync_line(_get_autosync_status()))
+
+
+@app.post("/api/toggle-autosync", response_class=HTMLResponse)
+async def api_toggle_autosync(request: Request):
+    """Auto-sync switch: send what a scan finds to Garmin (it follows the scans: no interval)."""
+    form = await request.form()
+    enabled = form.get("enabled", "false") in ("true", "True", "1", True)
+    config = load_config()
+    config.setdefault("auto_sync", {})["enabled"] = enabled
+    save_config(config)
+    logger.info("Liftosaur auto-sync %s", "on" if enabled else "off")
+    return HTMLResponse(templating.sync_line(enabled))
 
 
 @app.post("/api/sync-one")

@@ -271,11 +271,24 @@ class PacedGarmin:
                     raise InterruptedError from None
         raise AssertionError("unreachable")
 
-    def list_activities(self, max_pages: int | None = None) -> list[dict]:
-        """Activity summaries, newest first (all of them, or the first pages)."""
+    def list_activities(self, max_pages: int | None = None, since: str | None = None) -> list[dict]:
+        """Activity summaries, newest first (all of them, the first pages, or back to `since`,
+        a local date or date-time like "2026-11-20")."""
+        if since:
+            older = lambda a: str(a.get("startTimeLocal") or "")[:len(since)] < since  # noqa: E731
+            listed: list[dict] = []
+            for a in self._pages(max_pages):
+                if older(a):
+                    break
+                listed.append(a)
+            return listed
+        return list(self._pages(max_pages))
+
+    def _pages(self, max_pages: int | None = None):
+        """Activity summaries, newest first, read one page at a time."""
         # Garmin may return fewer than PAGE activities per page: only an empty page means the
         # end of the history (stopping at a short page used to miss every older activity).
-        activities: list[dict] = []
+        count = 0
         seen: set = set()
         start, pages = 0, 0
         while True:
@@ -284,12 +297,13 @@ class PacedGarmin:
             new = [a for a in page if isinstance(a, dict) and a.get("activityId")
                    and a["activityId"] not in seen]
             if not new:
-                return activities  # end of the history (or Garmin repeating itself)
+                return  # end of the history (or Garmin repeating itself)
             seen.update(a["activityId"] for a in new)
-            activities.extend(new)
-            self.p.message = f"{len(activities)} activities listed"
+            count += len(new)
+            self.p.message = f"{count} activities listed"
+            yield from new
             if max_pages and pages >= max_pages:
-                return activities
+                return
             start += len(page)
 
 

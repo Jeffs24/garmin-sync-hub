@@ -192,40 +192,43 @@ def test_zwift_settings_are_saved_and_applied(own_cfg):
 
     c, m = own_cfg
     r = c.post("/zwift/settings", data={
-        "auto_merge": ["off"], "scan_interval_minutes": "60", "scan_days": "14", "min_overlap": "0.6",
+        "auto_merge": ["off"], "scan_interval_minutes": "60", "min_overlap": "0.6",
     }, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/settings?saved=zwift#zwift"
-    assert (m.cfg.auto_merge, m.cfg.scan_interval_minutes, m.cfg.scan_days) == (False, 60, 14)
+    assert (m.cfg.auto_merge, m.cfg.scan_interval_minutes) == (False, 60)
     assert m.cfg.min_overlap == 0.6
-    assert m.state["next_scan"] is not None  # auto-sync off: pairs are still looked for
+    assert m.state["next_scan"] is not None  # auto-sync off: auto-scan still looks for pairs
 
     reloaded = Config.defaults()
     reloaded.data_dir = m.cfg.data_dir
     import json
     reloaded.update(json.loads(m.cfg.settings_file.read_text()))
-    assert reloaded.auto_merge is False and reloaded.scan_days == 14
+    assert reloaded.auto_merge is False and reloaded.min_overlap == 0.6
 
     page = c.get("/settings")
-    assert 'name="scan_days"' in page.text and 'value="14"' in page.text
+    assert 'name="min_overlap"' in page.text and 'value="0.6"' in page.text
+    assert 'name="scan_days"' not in page.text  # no period to set: a scan looks back to the last one
 
 
 def test_bad_zwift_settings_change_nothing(own_cfg):
     c, m = own_cfg
-    r = c.post("/zwift/settings", data={"scan_days": "0", "auto_merge": "off"}, follow_redirects=False)
+    r = c.post("/zwift/settings", data={"min_overlap": "5", "auto_merge": "off"}, follow_redirects=False)
     assert r.status_code == 303 and "error=Zwift+settings+not+saved" in r.headers["location"]
-    assert m.cfg.auto_merge is True and m.cfg.scan_days != 0
-    assert "between 1 and 365" in c.get(r.headers["location"]).text
+    assert m.cfg.auto_merge is True and m.cfg.min_overlap != 5
+    assert "between 0 and 1" in c.get(r.headers["location"]).text
 
 
-def test_zwift_autosync_toggle_decides_the_merge(own_cfg):
+def test_zwift_autoscan_and_autosync_switches(own_cfg):
     c, m = own_cfg
-    page = c.get("/zwift")
-    assert 'id="zw-autosync-toggle"' in page.text and "toggle-track active" in page.text
-    r = c.post("/zwift/autosync", data={"enabled": "false", "interval": "120"})
-    assert r.status_code == 200 and "Off" in r.text and "still found every 2 hours" in r.text
-    assert m.cfg.auto_merge is False and m.cfg.scan_interval_minutes == 120
-    r = c.post("/zwift/autosync", data={"enabled": "true", "interval": "120"})
-    assert m.cfg.auto_merge is True and "Next:" in r.text
+    page = c.get("/zwift").text
+    assert 'id="zw-autoscan-toggle"' in page and 'id="zw-autosync-toggle"' in page
+    r = c.post("/zwift/autoscan", data={"enabled": "false", "interval": "120"})
+    assert r.status_code == 200 and r.text.startswith("Off:") and "Check now" in r.text
+    assert m.cfg.auto_scan is False and m.cfg.scan_interval_minutes == 120 and m.state["next_scan"] is None
+    r = c.post("/zwift/autoscan", data={"enabled": "true", "interval": "120"})
+    assert m.cfg.auto_scan is True and "Next:" in r.text
+    r = c.post("/zwift/autosync", data={"enabled": "false"})
+    assert r.text.startswith("Off:") and m.cfg.auto_merge is False and m.cfg.auto_scan is True
 
 
 def test_scheduled_check_finds_pairs_and_merges_only_with_auto_sync(own_cfg, monkeypatch):
@@ -237,14 +240,18 @@ def test_scheduled_check_finds_pairs_and_merges_only_with_auto_sync(own_cfg, mon
     m.store.upsert_detected(1, 2, "Run", "Zwift", "2026-11-20T12:00:00+00:00", 0.97)
     m.cfg.auto_merge = False
     assert m.run_scan()
-    assert calls == [("scan", m.cfg.scan_days + 1)]  # found, nothing merged
+    assert calls == [("scan", calls[0][1])] and calls[0][1] > 3000  # first scan: the whole history, no merge
+    calls.clear()
+    assert m.run_scan()
+    assert calls == [("scan", 4)]  # then back to the last scan that worked, minus 3 days
     calls.clear()
     m.cfg.auto_merge = True
     assert m.run_scan()
-    assert ("merge", 1) in calls
+    assert ("merge", 1) in calls  # auto-sync: what was found is merged
     calls.clear()
-    assert m.run_scan(full=True)  # Check now: the whole history, never merges
-    assert calls[0][0] == "scan" and calls[0][1] > 3000 and not any(c[0] == "merge" for c in calls)
+    m.store.set_status(1, "detected", None)
+    assert m.run_scan(full=True)  # Check now: the whole history, merged too with auto-sync on
+    assert calls[0][0] == "scan" and calls[0][1] > 3000 and ("merge", 1) in calls
 
 
 def test_scan_loop_waits_and_wakes_on_settings_change(own_cfg):

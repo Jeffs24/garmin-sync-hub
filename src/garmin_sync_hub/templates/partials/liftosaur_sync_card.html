@@ -36,7 +36,7 @@
     <div id="sync-result"></div>
 
     <div class="autosync-block">
-    {{ ui.autosync_control("autosync", "/api/toggle-autosync", lift.auto_sync.enabled, lift.auto_sync.interval_minutes, lift.autosync_intervals, "Auto-sync", "sync new workouts", lift.autosync_line|safe) }}
+    {{ ui.scan_and_sync("lift", "/api/toggle-autoscan", "/api/toggle-autosync", lift.auto_sync.scan, lift.auto_sync.interval_minutes, lift.autosync_intervals, lift.autosync_line|safe, lift.auto_sync.enabled, lift.sync_line) }}
     </div>
 </div>
 <script>

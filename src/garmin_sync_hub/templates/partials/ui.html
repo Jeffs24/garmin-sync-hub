@@ -125,6 +125,40 @@
 <div id="{{ prefix }}-status" class="autosync-status">{{ status }}</div>
 {%- endmacro %}
 
+{# On/off switch without an interval (Auto-sync: it follows the scans). Posts {enabled} to `endpoint`;
+   the reply replaces the status line. #}
+{% macro switch_control(prefix, endpoint, enabled, label, hint, status) -%}
+{% set vals = 'js:{"enabled": document.getElementById("' ~ prefix ~ '-toggle").classList.contains("active")}' %}
+<div class="autosync-row">
+    <div class="autosync-side">
+        <div id="{{ prefix }}-toggle" class="toggle-track {% if enabled %}active{% endif %}"
+             hx-post="{{ endpoint }}" hx-target="#{{ prefix }}-status" hx-swap="innerHTML"
+             hx-vals='{{ vals }}' hx-disabled-elt="this" hx-trigger="click, keyup[key==' '||key=='Enter']"
+             onclick="this.classList.toggle('active'); this.setAttribute('aria-checked', this.classList.contains('active'))"
+             onkeyup="if (event.key === ' ' || event.key === 'Enter') { this.classList.toggle('active'); this.setAttribute('aria-checked', this.classList.contains('active')); }"
+             role="switch" tabindex="0" aria-checked="{{ 'true' if enabled else 'false' }}" aria-label="{{ label }}">
+            <div class="toggle-thumb"></div>
+        </div>
+        <span class="autosync-label">{{ label }}{% if hint %} <span class="autosync-hint">({{ hint }})</span>{% endif %}</span>
+    </div>
+</div>
+<div id="{{ prefix }}-status" class="autosync-status">{{ status }}</div>
+{%- endmacro %}
+
+{# The two switches of a source, the same on its page and in Settings: Auto-scan (with its interval)
+   finds what is new and lists it as not synced; Auto-sync sends what a scan finds to Garmin. #}
+{% macro scan_and_sync(prefix, scan_endpoint, sync_endpoint, scan_on, interval, intervals, scan_status, sync_on, sync_status) -%}
+{{ autosync_control(prefix ~ "-autoscan", scan_endpoint, scan_on, interval, intervals, "Auto-scan", "find what is new", scan_status) }}
+<div style="margin-top: 10px;">
+{{ switch_control(prefix ~ "-autosync", sync_endpoint, sync_on, "Auto-sync", "send it to Garmin", sync_status) }}
+</div>
+{%- endmacro %}
+
+{# One line for the Overview cards: "Auto-scan every 2 hours · next scan … · Auto-sync off". #}
+{% macro scan_sync_meta(scan_on, interval, next, sync_on) -%}
+{% if scan_on %}Auto-scan every {{ interval|interval_label }}{% if next %} · next scan <time data-local data-time datetime="{{ next.isoformat() }}"></time>{% endif %}{% else %}Auto-scan off{% endif %} · Auto-sync {{ 'on' if sync_on else 'off' }}
+{%- endmacro %}
+
 {# The line under an auto-sync switch. last/next are aware datetimes or None. #}
 {% macro autosync_line(enabled, last, next, manual_hint) -%}
 {% if not enabled %}Off: {{ manual_hint }}

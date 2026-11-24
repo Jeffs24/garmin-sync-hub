@@ -72,7 +72,7 @@
     {% endif %}
 
     <div class="autosync-block">
-        {{ ui.autosync_control("dogs-autosync", "/dogs/autosync", s.auto, s.interval_minutes, intervals, "Auto-sync", "add the dogs found", autosync_line|safe) }}
+        {{ ui.scan_and_sync("dogs", "/dogs/autoscan", "/dogs/autosync", s.scan, s.interval_minutes, intervals, autosync_line|safe, s.auto, sync_line) }}
         {% if s.last_error %}<div class="state-failed autosync-status">Last automatic run: {{ s.last_error }}</div>{% endif %}
     </div>
 

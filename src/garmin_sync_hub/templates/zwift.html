@@ -53,7 +53,7 @@
     {% if last_error %}<p class="source-top-error">Last check failed: {{ last_error }}</p>{% endif %}
 
     <div class="autosync-block">
-    {{ ui.autosync_control("zw-autosync", "/zwift/autosync", cfg.auto_merge, cfg.scan_interval_minutes, scan_intervals, "Auto-sync", "merge the pairs found", autosync_status|safe) }}
+    {{ ui.scan_and_sync("zw", "/zwift/autoscan", "/zwift/autosync", cfg.auto_scan, cfg.scan_interval_minutes, scan_intervals, autosync_status|safe, cfg.auto_merge, sync_line) }}
     </div>
 </div>
 

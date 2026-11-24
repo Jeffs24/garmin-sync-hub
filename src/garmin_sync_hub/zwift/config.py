@@ -20,8 +20,8 @@ SCAN_INTERVALS = (15, 30, 60, 120, 240, 360, 720, 1440)
 
 # Settings the web UI may change, with their type.
 EDITABLE: dict[str, type] = {
+    "auto_scan": bool,
     "scan_interval_minutes": int,
-    "scan_days": int,
     "zwift_auto_sync": bool,
     "auto_merge": bool,
     "delete_source": bool,
@@ -34,6 +34,7 @@ EDITABLE: dict[str, type] = {
 
 # .env names of the editable settings before 1.2.0, imported once into the settings file.
 LEGACY_ENV: dict[str, str] = {
+    "auto_scan": "ZWIFT_AUTO_SCAN",
     "scan_interval_minutes": "ZWIFT_SCAN_INTERVAL_MINUTES",
     "scan_days": "ZWIFT_SCAN_DAYS",
     "zwift_auto_sync": "ZWIFT_AUTO_SYNC",
@@ -58,8 +59,8 @@ class Config:
     min_position_ratio: float = 0.5
     time_tolerance_s: int = 2
     zwift_auto_sync: bool = True
-    # Before 1.6 the scan could be turned off: now pairs are always looked for, and auto-sync
-    # (auto_merge) decides whether they are merged. Kept so old settings files still load.
+    # Auto-scan: look for new pairs every scan_interval_minutes (they show up as not synced).
+    # Auto-sync is auto_merge: merge what a scan finds without a click.
     auto_scan: bool = True
     # How a Zwift copy is recognized: its device name, and its FIT manufacturer (260 = Zwift).
     source_names: list[str] = field(default_factory=lambda: ["zwift"])
