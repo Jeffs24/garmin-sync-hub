@@ -3,7 +3,16 @@
 {% block title %}{{ "History and files" if tab == "account" else "Pairs" }} · Zwift · garmin-sync-hub{% endblock %}
 {% block head %}
 {% if busy %}<meta http-equiv="refresh" content="5">{% endif %}
+{# Map of a pair's merged file, drawn in its card (partials/zwift_preview.html) #}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
+    .zw-map { height: 320px; border-radius: var(--radius-sm); margin-top: 8px; }
+    .zw-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 12px; }
+    .zw-stat { display: flex; flex-direction: column; font-size: 13px; }
+    .zw-stat span { color: var(--text-muted); font-size: 12px; }
+    .chart { margin-bottom: 16px; font-size: 13px; }
+    .chart svg { width: 100%; height: 120px; display: block; background: var(--bg-primary); border-radius: 6px; }
     .card { margin-bottom: 16px; }
     .zw-actions { display: flex; gap: 6px; flex-wrap: wrap; }
     .zw-msg { color: var(--text-muted); font-size: 13px; margin-top: 4px; }

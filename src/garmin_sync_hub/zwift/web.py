@@ -431,17 +431,21 @@ class ZwiftModule:
             return FileResponse(path, filename=f"{target_id}_merged.fit", media_type="application/octet-stream")
 
         @router.get("/pairs/{target_id}/preview", response_class=HTMLResponse)
-        def preview(request: Request, target_id: int) -> HTMLResponse:
+        def preview(request: Request, target_id: int):
+            """Map, stats and charts of the merged file, loaded into the pair's card when opened.
+            Opened as a page (an old link): the Pairs page, on this pair's card."""
             row = m.store.get(target_id)
             if not row:
                 raise HTTPException(404)
+            if not request.headers.get("HX-Request"):
+                return RedirectResponse(f"/zwift#pair-{target_id}", status_code=303)
             path = m.cfg.backup_dir / str(target_id) / f"{target_id}_merged.fit"
             if not path.exists():
-                return _render("zwift_preview.html", request, row=row, has_file=False, pv=summarize_empty(),
+                return _render("partials/zwift_preview.html", request, row=row, has_file=False, pv=summarize_empty(),
                                charts=[], delete_source=m.cfg.delete_source)
             pv = summarize(path.read_bytes())
             charts = [svg_chart(n, pts, invert=n.startswith("Pace")) for n, pts in pv.series.items()]
-            return _render("zwift_preview.html", request, row=row, has_file=True, pv=pv, charts=charts,
+            return _render("partials/zwift_preview.html", request, row=row, has_file=True, pv=pv, charts=charts,
                            delete_source=m.cfg.delete_source)
 
         return router

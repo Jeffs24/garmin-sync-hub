@@ -64,20 +64,29 @@ def test_merge_all_queues_waiting_pairs(client, monkeypatch):
     assert page.count('hx-trigger="every 3s"') == 2
 
 
-def test_preview_page(client):
+def test_preview_opens_in_the_card(client):
+    """Map and charts load into the pair's card (no separate page), like a workout's heart rate."""
     c, m = client
+    hx = {"HX-Request": "true"}
     m.store.upsert_detected(1, 2, "Treadmill Run", "Zwift - Watopia", "2026-11-20T12:00:00+00:00", 0.97)
-    r = c.get("/zwift/pairs/1/preview")
-    assert "Simulate" in r.text and "first" in r.text
+    r = c.get("/zwift/pairs/1/preview", headers=hx)
+    assert "Simulate" in r.text and "first" in r.text and "<html" not in r.text
     folder = m.cfg.backup_dir / "1"
     folder.mkdir(parents=True)
     merged, _ = merge_track(watch_fit(START, 120), zwift_fit(START, 120))
     (folder / "1_merged.fit").write_bytes(merged)
-    r = c.get("/zwift/pairs/1/preview")
+    r = c.get("/zwift/pairs/1/preview", headers=hx)
     assert r.status_code == 200
-    assert "L.polyline" in r.text and "Heart rate" in r.text
-    assert "delete the watch activity #1 and the Zwift copy #2" in r.text
-    assert c.get("/zwift/pairs/99/preview").status_code == 404
+    assert "L.polyline" in r.text and "Heart rate" in r.text and 'id="zw-map-1"' in r.text
+    assert "deletes the watch activity #1 and the Zwift copy #2" in r.text
+    assert c.get("/zwift/pairs/99/preview", headers=hx).status_code == 404
+    old_link = c.get("/zwift/pairs/1/preview", follow_redirects=False)  # opened as a page: back to the card
+    assert old_link.status_code == 303 and old_link.headers["location"] == "/zwift#pair-1"
+
+    m.store.set_status(1, "simulated", "ok")
+    page = c.get("/zwift").text
+    assert 'hx-get="/zwift/pairs/1/preview" hx-trigger="toggle once"' in page and "Map and charts" in page
+    assert 'href="/zwift/pairs/1/preview"' not in page
 
 
 def test_overview_shows_every_source(client, monkeypatch):
