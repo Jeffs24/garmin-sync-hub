@@ -157,9 +157,9 @@
                     Garmin
                 </a>
                 {% endif %}
-                {% if w.status == 'uploaded' and w.edited_since_sync %}
-                <button type="button" class="chip chip-warn" onclick="resyncWorkout('{{ w.id }}', this, {{ 'false' if w.sync_action == 'updated' else 'true' }})"
-                    title="Delete the Garmin activity and upload it again with the latest Liftosaur data">
+                {% if w.status == 'uploaded' %}
+                <button type="button" class="chip{{ ' chip-warn' if w.edited_since_sync }}" onclick="resyncWorkout('{{ w.id }}', this, {{ 'false' if w.sync_action == 'updated' else 'true' }})"
+                    title="{{ 'Write the sets again into the watch activity' if w.sync_action == 'updated' else 'Replace the Garmin activity with a new upload' }}, with the latest Liftosaur data and your current mappings">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                     Re-sync
                 </button>

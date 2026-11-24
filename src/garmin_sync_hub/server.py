@@ -1053,9 +1053,9 @@ async def mappings_page(request: Request):
     from garmin_sync_hub.liftosaur.mapper import fit_exercise_name
 
     def label(cat: int, subcat: int) -> str:
-        """What Garmin shows: the category and the exact exercise name."""
+        """What Garmin shows: the category and the exact exercise name (or "generic": the category only)."""
         exercise = fit_exercise_name(cat, subcat)
-        return CAT_NAMES.get(cat, f"Category {cat}") + (f" › {exercise}" if exercise else "")
+        return CAT_NAMES.get(cat, f"Category {cat}") + (f" › {exercise}" if exercise else " (generic)")
 
     mappings = []
     for name, (cat, subcat) in sorted(EXERCISE_TO_GARMIN.items()):
@@ -1165,14 +1165,19 @@ async def api_save_mapping(request: Request):
     if category not in valid_cats:
         return HTMLResponse(f'<div class="toast toast-error">Invalid category ID {category}</div>')
 
-    from garmin_sync_hub.liftosaur.mapper import save_custom_mapping
+    from garmin_sync_hub.liftosaur.mapper import GENERIC_SUB, fit_exercise_names, save_custom_mapping
+
+    known = {sub for sub, _ in fit_exercise_names(category)}
+    if subcategory != GENERIC_SUB and known and subcategory not in known:
+        return HTMLResponse(f'<div class="toast toast-error">{subcategory} is not a Garmin exercise of this category. '
+                            'Pick one from the list, or “generic”.</div>')
     save_custom_mapping(exercise_name, category, subcategory)
 
     cat_label = _get_cat_names().get(category, f"Category {category}")
     from garmin_sync_hub.liftosaur.mapper import fit_exercise_name
 
     exercise = fit_exercise_name(category, subcategory)
-    shown = html.escape(f"{cat_label} › {exercise}" if exercise else cat_label)
+    shown = html.escape(f"{cat_label} › {exercise}" if exercise else f"{cat_label} (generic)")
     return HTMLResponse(f'<div class="toast toast-success">Mapped "{html.escape(exercise_name)}" → {shown} ({category}:{subcategory}). <a href="/liftosaur/mappings">Reload</a></div>')
 
 
@@ -1223,7 +1228,11 @@ async def api_garmin_exercise_names(category: int):
     """Named exercises of a Garmin category, for the mapping forms: [{"sub": 0, "name": "..."}]."""
     from garmin_sync_hub.liftosaur.mapper import fit_exercise_names
 
-    return JSONResponse([{"sub": sub, "name": name} for sub, name in fit_exercise_names(category)])
+    from garmin_sync_hub.liftosaur.mapper import GENERIC_SUB
+
+    names = fit_exercise_names(category)
+    generic = [{"sub": GENERIC_SUB, "name": "Generic (category only)"}] if names else []
+    return JSONResponse(generic + [{"sub": sub, "name": name} for sub, name in names])
 
 
 @app.get("/api/garmin-categories")

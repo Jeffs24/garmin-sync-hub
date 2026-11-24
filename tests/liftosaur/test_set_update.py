@@ -726,7 +726,18 @@ class TestSingleGarminExerciseRebuild:
             updated = mock_update.call_args[0][2]
 
         assert len(updated) == len(garmin_sets)
-        # Original Garmin labels kept, no curl set added
-        assert [s["exercises"][0]["category"] for s in updated if s["setType"] == "ACTIVE"] == ["BP"] * 4 + ["SP"] * 2
+        # Exercises take the Liftosaur mapping (a corrected mapping reaches the activity), no curl set added
+        assert [s["exercises"][0]["category"] for s in updated if s["setType"] == "ACTIVE"] == ["BENCH_PRESS"] * 4 + ["SHOULDER_PRESS"] * 2
         assert updated[8]["repetitionCount"] == 12
         assert updated[8]["weight"] == 14000
+
+
+def test_watch_sets_get_the_mapped_exercise_and_unmapped_ones_keep_the_watch_guess():
+    from garmin_sync_hub.liftosaur.sync import _apply_liftosaur_values, _garmin_exercise_label
+
+    sets = [{"index": 0, "exercises": [{"category": "SHOULDER_PRESS", "name": "ALTERNATING_DUMBBELL_SHOULDER_PRESS"}]},
+            {"index": 1, "exercises": [{"category": "CURL", "name": "HAMMER_CURL"}]}]
+    _apply_liftosaur_values(sets, [({"index": 0}, {"reps": 8, "weight_kg": 20})], _garmin_exercise_label(24, 4))
+    _apply_liftosaur_values(sets, [({"index": 1}, {"reps": 10})], None)
+    assert sets[0]["exercises"][0]["name"] == "BARBELL_SHOULDER_PRESS" and sets[0]["repetitionCount"] == 8
+    assert sets[1]["exercises"][0]["name"] == "HAMMER_CURL" and sets[1]["repetitionCount"] == 10

@@ -145,10 +145,17 @@ def _match_exercise_sets(
     return None
 
 
-def _apply_liftosaur_values(garmin_sets: list[dict], matches: list[tuple[dict, dict]]) -> None:
-    """Update reps and weight in-place on the garmin_sets list."""
+def _apply_liftosaur_values(garmin_sets: list[dict], matches: list[tuple[dict, dict]],
+                            label: dict | None = None) -> None:
+    """Update reps and weight in-place on the garmin_sets list.
+
+    label: the Garmin exercise of the Liftosaur exercise (from the mappings). It replaces what the
+    watch guessed, so a corrected mapping reaches the activity on the next sync.
+    """
     for garmin_entry, liftosaur_set in matches:
         idx = garmin_entry["index"]
+        if label is not None:
+            garmin_sets[idx]["exercises"] = [dict(label)]
         reps = liftosaur_set.get("reps")
         weight_kg = liftosaur_set.get("weight_kg")
         if reps is not None:
@@ -363,7 +370,9 @@ def update_existing_activity_sets(garmin_client, activity_id: int, workout: dict
             )
             continue
 
-        _apply_liftosaur_values(garmin_sets, matches)
+        cat, sub, _ = lookup_exercise(ex_name)
+        label = _garmin_exercise_label(cat, sub) if cat != 65534 else None  # unmapped: keep the watch's
+        _apply_liftosaur_values(garmin_sets, matches, label)
         any_matched = True
         logger.info("  Matched %d sets for '%s'", len(matches), ex_name)
 

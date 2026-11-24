@@ -20,6 +20,8 @@ from __future__ import annotations
 
 # --------------------------------------------------------------------------- #
 # Mapping: exercise name  ->  (FIT exercise category, subcategory)
+# Subcategory 65535 (GENERIC_SUB) = the category only: Garmin shows the category name.
+# 0 is NOT generic: it is the first named exercise of the category.
 # --------------------------------------------------------------------------- #
 
 EXERCISE_TO_GARMIN: dict[str, tuple[int, int]] = {
@@ -45,7 +47,7 @@ EXERCISE_TO_GARMIN: dict[str, tuple[int, int]] = {
     "Incline Bench Press (Smith Machine)":      (0, 8),    # bench_press / incline_barbell_bench_press (closest)
     "Incline Chest Press (Machine)":            (0, 9),    # bench_press / incline_dumbbell_bench_press (closest machine)
     "Iso-Lateral Chest Press (Machine)":        (0, 6),    # bench_press / dumbbell_bench_press (closest)
-    "Chest Press (Band)":                       (0, 1),    # bench_press / barbell_bench_press (closest)
+    "Chest Press (Band)":                       (22, 0), # push_up / chest_press_with_band
     "Chest Press (Machine)":                    (0, 6),    # bench_press / dumbbell_bench_press (closest machine press)
     "Dumbbell Squeeze Press":                   (0, 6),    # bench_press / dumbbell_bench_press (squeeze variant)
     "Hex Press (Dumbbell)":                     (0, 6),    # bench_press / dumbbell_bench_press (hex variant)
@@ -77,7 +79,7 @@ EXERCISE_TO_GARMIN: dict[str, tuple[int, int]] = {
     "Incline Push Ups":                         (22, 27),  # push_up / incline_push_up
     "Kneeling Push Up":                         (22, 33),  # push_up / kneeling_push_up
     "One Arm Push Up":                          (22, 38),  # push_up / one_arm_push_up
-    "Pike Pushup":                              (22, 49),  # push_up / shoulder_push_up (closest pike)
+    "Pike Pushup":                              (22, 84), # push_up / pike_push_up
     "Plank Pushup":                             (22, 77),  # push_up / push_up (plank-to-pushup)
     "Push Up":                                  (22, 77),  # push_up / push_up
     "Push Up (Weighted)":                       (22, 40),  # push_up / weighted_push_up
@@ -101,8 +103,8 @@ EXERCISE_TO_GARMIN: dict[str, tuple[int, int]] = {
     # ======================================================================= #
     #  BACK – Rows (category 23)
     # ======================================================================= #
-    "Bent Over Row (Band)":                     (23, 0),   # row / barbell_straight_leg_deadlift_to_row (closest band row)
-    "Bent Over Row (Barbell)":                  (23, 46),  # row / bent_over_barbell_row
+    "Bent Over Row (Band)":                     (23, 65535), # row / generic (no banded row in the FIT profile)
+    "Bent Over Row (Barbell)":                  (23, 46),  # row / bent_over_row_with_barbell
     "Bent Over Row (Dumbbell)":                 (23, 2),   # row / dumbbell_row
     "Chest Supported Incline Row (Dumbbell)":   (23, 40),  # row / chest_supported_dumbbell_row
     "Dumbbell Row":                             (23, 2),   # row / dumbbell_row
@@ -115,7 +117,7 @@ EXERCISE_TO_GARMIN: dict[str, tuple[int, int]] = {
     "Landmine Row":                             (23, 13),  # row / one_arm_bent_over_row (closest)
     "Low Row (Suspension)":                     (23, 26),  # row / suspended_inverted_row
     "Meadows Rows (Barbell)":                   (23, 13),  # row / one_arm_bent_over_row
-    "Pendlay Row (Barbell)":                    (23, 46),  # row / bent_over_barbell_row (Pendlay variant)
+    "Pendlay Row (Barbell)":                    (23, 46),  # row / bent_over_row_with_barbell (Pendlay variant)
     "Renegade Row (Dumbbell)":                  (23, 15),  # row / renegade_row
     "Seated Cable Row - Bar Grip":              (23, 18),  # row / seated_cable_row
     "Seated Cable Row - Bar Wide Grip":         (23, 33),  # row / wide_grip_seated_cable_row
@@ -212,7 +214,7 @@ EXERCISE_TO_GARMIN: dict[str, tuple[int, int]] = {
     # ======================================================================= #
     #  SHOULDERS – Shoulder Stability (category 25)
     # ======================================================================= #
-    "Shoulder Extension":                       (25, 3),   # shoulder_stability / bent_arm_lateral_raise_and_external_rotation
+    "Shoulder Extension":                       (37, 37), # banded_exercises / shoulder_extension
     "Shoulder Taps":                            (25, 3),   # shoulder_stability / bent_arm_lateral_raise_and_external_rotation (closest)
 
     # ======================================================================= #
@@ -239,10 +241,10 @@ EXERCISE_TO_GARMIN: dict[str, tuple[int, int]] = {
     "Bicep Curl (Dumbbell)":                    (7, 37),   # curl / standing_dumbbell_biceps_curl
     "Bicep Curl (Machine)":                     (7, 8),    # curl / cable_biceps_curl (closest machine)
     "Bicep Curl (Suspension)":                  (7, 37),   # curl / standing_dumbbell_biceps_curl (closest)
-    "Concentration Curl":                       (7, 37),   # curl / standing_dumbbell_biceps_curl (closest concentration)
+    "Concentration Curl":                       (7, 44), # curl / one_arm_concentration_curl
     "Cross Body Hammer Curl":                   (7, 12),   # curl / cross_body_dumbbell_hammer_curl
     "Drag Curl":                                (7, 3),    # curl / barbell_biceps_curl (drag variant)
-    "EZ Bar Biceps Curl":                       (7, 19),   # curl / ez_bar_preacher_curl (closest EZ bar)
+    "EZ Bar Biceps Curl":                       (7, 38), # curl / standing_ez_bar_biceps_curl
     "Hammer Curl (Band)":                       (7, 16),   # curl / dumbbell_hammer_curl (closest band)
     "Hammer Curl (Cable)":                      (7, 9),    # curl / cable_hammer_curl
     "Hammer Curl (Dumbbell)":                   (7, 16),   # curl / dumbbell_hammer_curl
@@ -353,11 +355,11 @@ EXERCISE_TO_GARMIN: dict[str, tuple[int, int]] = {
     "Lunge":                                    (17, 32),  # lunge / lunge
     "Lunge (Barbell)":                          (17, 10),  # lunge / barbell_lunge
     "Lunge (Dumbbell)":                         (17, 21),  # lunge / dumbbell_lunge
-    "Overhead Dumbbell Lunge":                  (17, 40),  # lunge / overhead_dumbbell_lunge
+    "Overhead Dumbbell Lunge":                  (17, 83), # lunge / overhead_dumbbell_lunge
     "Reverse Lunge":                            (17, 32),  # lunge / lunge (reverse variant)
     "Reverse Lunge (Barbell)":                  (17, 11),  # lunge / barbell_reverse_lunge
-    "Reverse Lunge (Dumbbell)":                 (17, 21),  # lunge / dumbbell_lunge (reverse)
-    "Split Squat (Dumbbell)":                   (17, 28),  # lunge / dumbbell_split_squat
+    "Reverse Lunge (Dumbbell)":                 (17, 82), # lunge / dumbbell_reverse_lunge
+    "Split Squat (Dumbbell)":                   (28, 28), # squat / dumbbell_split_squat
     "Walking Lunge":                            (17, 78),  # lunge / walking_lunge
     "Walking Lunge (Dumbbell)":                 (17, 77),  # lunge / walking_dumbbell_lunge
 
@@ -446,8 +448,8 @@ EXERCISE_TO_GARMIN: dict[str, tuple[int, int]] = {
     # ======================================================================= #
     #  CORE – Core (category 5)
     # ======================================================================= #
-    "Ab Scissors":                              (5, 49),   # core / bicycle (closest scissors)
-    "Cable Core Palloff Press":                 (5, 46),   # core / russian_twist (closest anti-rotation)
+    "Ab Scissors":                              (5, 65), # core / scissors
+    "Cable Core Palloff Press":                 (5, 6),  # core / cable_core_press (Pallof press)
     "Cable Twist (Down to up)":                 (4, 2),    # chop / cable_woodchop (twist variant)
     "Cable Twist (Up to down)":                 (4, 2),    # chop / cable_woodchop (twist variant)
     "Russian Twist (Bodyweight)":               (5, 46),   # core / russian_twist
@@ -478,11 +480,11 @@ EXERCISE_TO_GARMIN: dict[str, tuple[int, int]] = {
     # ======================================================================= #
     #  CORE – Sit Up (category 27)
     # ======================================================================= #
-    "Elbow to Knee":                            (27, 37),  # sit_up / sit_up (elbow-to-knee variant)
+    "Elbow to Knee":                            (6, 11), # crunch / elbow_to_knee_crunch
     "Jackknife Sit Up":                         (27, 37),  # sit_up / sit_up (jackknife variant)
     "Sit Up":                                   (27, 37),  # sit_up / sit_up
     "Sit Up (Weighted)":                        (27, 34),  # sit_up / weighted_sit_up
-    "Toe Touch":                                (27, 37),  # sit_up / sit_up (toe touch variant)
+    "Toe Touch":                                (35, 84), # move / toe_touch
     "V Up":                                     (27, 31),  # sit_up / v_up
 
     # ======================================================================= #
@@ -539,24 +541,23 @@ EXERCISE_TO_GARMIN: dict[str, tuple[int, int]] = {
     "Jump Squat":                               (20, 3),   # plyo / body_weight_jump_squat
     "Lateral Box Jump":                         (20, 19),  # plyo / lateral_plyo_squats (closest)
     "Ball Slams":                               (20, 25),  # plyo / medicine_ball_slam
-    "Sled Push":                                (20, 29),  # plyo / squat_jump_onto_box (closest heavy plyo)
+    "Sled Push":                                (45, 4), # sled / push
 
     # ======================================================================= #
     #  TOTAL BODY (category 29)
     # ======================================================================= #
     "Burpee":                                   (29, 0),   # total_body / burpee
-    "Burpee Over the Bar":                      (29, 0),   # total_body / burpee (over bar variant)
+    "Burpee Over the Bar":                      (29, 18), # total_body / total_body_burpee_over_bar
 
     # ======================================================================= #
     #  CARRY (category 3)
     # ======================================================================= #
     "Farmers Walk":                             (3, 1),    # carry / farmers_walk
-    "Overhead Dumbbell Lunge":                  (3, 4),    # carry / overhead_carry (closest overhead lunge/carry)
 
     # ======================================================================= #
     #  WARM UP (category 31)
     # ======================================================================= #
-    "Warm Up":                                  (31, 0),   # warm_up / generic warm up
+    "Warm Up":                                  (31, 65535), # warm_up / generic warm up
 
     # ======================================================================= #
     #  FLEXIBILITY / STABILITY – mapped to known FIT categories
@@ -564,13 +565,13 @@ EXERCISE_TO_GARMIN: dict[str, tuple[int, int]] = {
     "Bird Dog":                                 (11, 1),   # hip_stability / dead_bug (closest quadruped stability)
     "Dead Bug":                                 (11, 1),   # hip_stability / dead_bug
     "Dead Hang":                                (21, 38),  # pull_up / pull_up (hang variant – grip/lat endurance)
-    "Downward Dog":                             (31, 0),   # warm_up / generic (yoga pose)
-    "Front Lever Hold":                         (21, 38),  # pull_up / pull_up (front lever)
-    "Front Lever Raise":                        (21, 38),  # pull_up / pull_up (front lever)
+    "Downward Dog":                             (31, 65535), # warm_up / generic (yoga pose)
+    "Front Lever Hold":                         (5, 20), # core / modified_front_lever (closest)
+    "Front Lever Raise":                        (5, 20), # core / modified_front_lever (closest)
     "Handstand Hold":                           (22, 25),  # push_up / handstand_push_up (hold variant)
     "Handstand Push Up":                        (22, 25),  # push_up / handstand_push_up
     "Jack Knife (Suspension)":                  (6, 83),   # crunch / crunch (jackknife on suspension)
-    "L-Sit Hold":                               (16, 1),   # leg_raise / hanging_leg_raise (L-sit hold)
+    "L-Sit Hold":                               (5, 88), # core / l_sit
     "Landmine 180":                             (4, 2),    # chop / cable_woodchop (rotational)
     "Lying Neck Curls":                         (65534, 0), # unknown – no FIT neck category
     "Lying Neck Curls (Weighted)":              (65534, 0), # unknown – no FIT neck category
@@ -581,36 +582,36 @@ EXERCISE_TO_GARMIN: dict[str, tuple[int, int]] = {
     #  KETTLEBELL SPECIFIC
     # ======================================================================= #
     "Kettlebell Around the World":              (5, 46),   # core / russian_twist (closest rotational KB)
-    "Kettlebell Halo":                          (25, 3),   # shoulder_stability / bent_arm_lateral_raise (closest)
-    "Kettlebell Turkish Get Up":                (29, 0),   # total_body / burpee (closest full-body KB)
+    "Kettlebell Halo":                          (25, 65535), # shoulder_stability / generic (no halo in the FIT profile)
+    "Kettlebell Turkish Get Up":                (5, 89), # core / turkish_get_up
 
     # ======================================================================= #
     #  CARDIO / MACHINES — uses newer FIT SDK categories (33+) where available
     # ======================================================================= #
-    "Aerobics":                                 (2, 0),    # cardio / generic
+    "Aerobics":                                 (2, 65535),  # cardio / generic
     "Air Bike":                                 (41, 0),   # indoor_bike / air_bike
-    "Battle Ropes":                             (38, 0),   # battle_rope / alternating_waves
+    "Battle Ropes":                             (38, 5), # battle_rope / alternating_wave
     "Boxing":                                   (2, 42),   # cardio / punch
-    "Climbing":                                 (2, 0),    # cardio / generic
+    "Climbing":                                 (2, 65535),  # cardio / generic
     "Cycling":                                  (33, 0),   # bike / bike
     "Elliptical Trainer":                       (39, 0),   # elliptical / elliptical
-    "HIIT":                                     (2, 0),    # cardio / generic
+    "HIIT":                                     (2, 65535),  # cardio / generic
     "Hiking":                                   (32, 1),   # run / walk (hiking = walking)
     "Jump Rope":                                (2, 6),    # cardio / jump_rope
     "Jumping Jack":                             (2, 12),   # cardio / jumping_jacks
-    "Pilates":                                  (2, 0),    # cardio / generic
+    "Pilates":                                  (2, 65535),  # cardio / generic
     "Rowing Machine":                           (42, 0),   # indoor_row / rowing_machine
-    "Skating":                                  (2, 0),    # cardio / generic
-    "Skiing":                                   (2, 0),    # cardio / generic
-    "Snowboarding":                             (2, 0),    # cardio / generic
+    "Skating":                                  (2, 65535),  # cardio / generic
+    "Skiing":                                   (2, 65535),  # cardio / generic
+    "Snowboarding":                             (2, 65535),  # cardio / generic
     "Spinning":                                 (41, 3),   # indoor_bike / stationary_bike
-    "Stretching":                               (31, 0),   # warm_up / generic (stretching)
-    "Swimming":                                 (2, 0),    # cardio / generic
+    "Stretching":                               (31, 65535), # warm_up / generic (stretching)
+    "Swimming":                                 (2, 65535),  # cardio / generic
     "Treadmill":                                (52, 1),   # run_indoor / treadmill
-    "Yoga":                                     (36, 0),   # pose / generic (yoga)
-    "High Knees":                               (2, 0),    # cardio / generic
+    "Yoga":                                     (36, 65535), # pose / generic (yoga)
+    "High Knees":                               (2, 65535),  # cardio / generic
     "Sprints":                                  (32, 3),   # run / sprint
-    "Cable Pull Through":                       (10, 11),  # hip_raise / hip_raise (cable pull-through = hip hinge)
+    "Cable Pull Through":                       (4, 0),  # chop / cable_pull_through
 
     # ======================================================================= #
     #  RUNNING (category 32)
@@ -702,6 +703,11 @@ def update_custom_mapping_cache(exercise_name: str, category: int, subcategory: 
     _custom_mappings[exercise_name] = (category, subcategory)
 
 
+# Sub-id meaning "this category, no specific exercise": the FIT "invalid" value of exercise_name.
+# The file then carries the category only, and Garmin Connect shows the category ("Shoulder Press").
+GENERIC_SUB = 65535
+
+
 def _exercise_name_enum(category: int):
     """FIT enum of the exercise names of a category (e.g. ShoulderPressExerciseName), or None."""
     from fit_tool.profile import profile_type
@@ -727,8 +733,14 @@ def fit_exercise_names(category: int) -> list[tuple[int, str]]:
     return [(m.value, _label(m.name)) for m in enum] if enum else []
 
 
+def is_generic(subcategory: int) -> bool:
+    return int(subcategory) == GENERIC_SUB
+
+
 def fit_exercise_name(category: int, subcategory: int) -> str | None:
     """Name Garmin shows for (category, subcategory), e.g. (24, 0) -> "Alternating Dumbbell Shoulder Press"."""
+    if is_generic(subcategory):
+        return None
     enum = _exercise_name_enum(category)
     try:
         return _label(enum(subcategory).name) if enum else None

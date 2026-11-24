@@ -31,7 +31,7 @@ from fit_tool.profile.profile_type import (
     SetType,
 )
 
-from garmin_sync_hub.liftosaur.mapper import lookup_exercise
+from garmin_sync_hub.liftosaur.mapper import GENERIC_SUB, lookup_exercise
 
 # ---------------------------------------------------------------------------
 # Default timing/profile — overridden by config or profile param
@@ -253,7 +253,8 @@ def generate_fit(
         etm = ExerciseTitleMessage()
         etm.message_index = ex_idx
         etm.exercise_category = cat
-        etm.exercise_name = sub
+        if sub != GENERIC_SUB:  # generic: the category alone, Garmin shows its name
+            etm.exercise_name = sub
         etm.workout_step_name = display_name
         builder.add(etm)
 
@@ -299,7 +300,8 @@ def generate_fit(
         active.duration = set_duration_s
         active.set_type = SetType.ACTIVE
         active.category = [cat]
-        active.category_subtype = [sub]
+        if sub != GENERIC_SUB:
+            active.category_subtype = [sub]
         active.message_index = msg_index
         active.workout_step_index = ex_idx
 

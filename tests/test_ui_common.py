@@ -216,4 +216,63 @@ def test_garmin_exercise_names_are_shown_not_just_numbers(client, monkeypatch):
     assert {"sub": 4, "name": "Barbell Shoulder Press"} in names
     monkeypatch.setattr(server, "_get_unmapped_exercises", lambda fetch=True: [])
     page = client.get("/liftosaur/mappings").text
-    assert "Shoulder Press › " in page and "There is no generic exercise" in page
+    assert "Shoulder Press › " in page and "is not generic" in page
+
+
+def test_resync_is_offered_on_every_synced_workout(client, monkeypatch):
+    monkeypatch.setattr(server, "load_config", lambda: {"liftosaur_api_key": "", "user_profile": {}, "timing": {}})
+    _db = db.get_db()
+    _db.set_app_config("workouts_page_1", {"workouts": [
+        {"id": "rs-1", "title": "Push", "exercises": [], "start_time": "2026-11-20T10:00:00Z"},
+        {"id": "rs-2", "title": "Walk", "exercises": [], "start_time": "2026-11-19T10:00:00Z"}], "page_count": 1})
+    db.mark_synced("rs-1", "11", "Push", action="uploaded")
+    db.mark_synced("rs-2", "12", "Walk", action="updated")
+    try:
+        page = client.get("/liftosaur/workouts").text
+        assert "resyncWorkout('rs-1', this, true)" in page  # replaces the uploaded activity
+        assert "resyncWorkout('rs-2', this, false)" in page  # writes the sets into the watch activity again
+    finally:
+        db.unsync("rs-1"), db.unsync("rs-2")
+        _db.set_app_config("workouts_page_1", {})
+
+
+def test_generic_mapping_writes_the_category_only(tmp_path, monkeypatch):
+    """Sub-id 65535 = no specific exercise: Garmin shows the category ("Shoulder Press")."""
+    from fit_tool.fit_file import FitFile
+    from fit_tool.profile.messages.exercise_title_message import ExerciseTitleMessage
+    from fit_tool.profile.messages.set_message import SetMessage
+
+    from garmin_sync_hub.liftosaur import fit as fit_mod
+    from garmin_sync_hub.liftosaur.mapper import GENERIC_SUB, fit_exercise_name
+    from garmin_sync_hub.liftosaur.sync import _garmin_exercise_label
+
+    table = {"Landmine Shoulder Press": (24, GENERIC_SUB), "Arnold": (24, 1)}
+    monkeypatch.setattr(fit_mod, "lookup_exercise", lambda name: (*table[name], name))
+    workout = {"id": "g1", "title": "Push", "start_time": "2026-11-20T10:00:00Z", "end_time": "2026-11-20T10:30:00Z",
+               "exercises": [{"title": "Landmine Shoulder Press", "sets": [{"type": "normal", "reps": 8, "weight_kg": 20}]},
+                             {"title": "Arnold", "sets": [{"type": "normal", "reps": 10, "weight_kg": 12}]}]}
+    path = tmp_path / "w.fit"
+    fit_mod.generate_fit(workout, hr_samples=None, output_path=str(path))
+    messages = [r.message for r in FitFile.from_file(str(path)).records]
+    titles = [m for m in messages if isinstance(m, ExerciseTitleMessage)]
+    sets = [m for m in messages if isinstance(m, SetMessage) and m.category]
+    assert titles[0].exercise_category == 24 and titles[0].exercise_name is None
+    assert titles[1].exercise_name == 1
+    assert sets[0].category == [24] and not sets[0].category_subtype
+    assert sets[1].category_subtype == [1]
+    # same meaning for activities the watch recorded, and in the mappings list
+    assert _garmin_exercise_label(24, GENERIC_SUB) == {"probability": 100.0, "category": "SHOULDER_PRESS", "name": None}
+    assert fit_exercise_name(24, GENERIC_SUB) is None
+
+
+def test_mapping_form_offers_generic_and_refuses_unknown_subs(client, monkeypatch):
+    from garmin_sync_hub.liftosaur import mapper
+
+    names = client.get("/api/garmin-exercise-names/24").json()
+    assert names[0] == {"sub": 65535, "name": "Generic (category only)"}
+    saved = []
+    monkeypatch.setattr(mapper, "save_custom_mapping", lambda *a: saved.append(a))
+    r = client.post("/api/mapping", data={"exercise_name": "Landmine Shoulder Press", "category": "24", "subcategory": "26"})
+    assert "not a Garmin exercise of this category" in r.text and saved == []
+    r = client.post("/api/mapping", data={"exercise_name": "Landmine Shoulder Press", "category": "24", "subcategory": "65535"})
+    assert "Shoulder Press (generic)" in r.text and saved == [("Landmine Shoulder Press", 24, 65535)]
