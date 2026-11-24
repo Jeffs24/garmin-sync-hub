@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "garmin-sync-hub"
 version = "1.6.0"
-description = "Garmin Connect automations: Liftosaur workouts to Garmin, and Zwift maps on your watch activities"
+description = "Garmin Connect automations: Liftosaur workouts, Zwift maps, dogs and a full backup"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"

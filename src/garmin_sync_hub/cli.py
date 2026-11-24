@@ -263,7 +263,7 @@ def cmd_zwift_merge_files(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="garmin-sync-hub",
-        description="Garmin Connect automations: Liftosaur workouts and Zwift maps",
+        description="Garmin Connect automations: Liftosaur workouts, Zwift maps, dogs and a full backup",
     )
     parser.add_argument("--liftosaur-api-key", help="Liftosaur API key (or LIFTOSAUR_API_KEY env var)")
     parser.add_argument("--garmin-email", help="Garmin email, to connect from the command line (no MFA)")
