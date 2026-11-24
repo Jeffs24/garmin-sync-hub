@@ -69,7 +69,7 @@
     </svg>
     </div>
     <p class="pipeline-note">
-        {% if cfg.auto_scan %}Scans run every {{ cfg.scan_interval_minutes|interval_label }}{% else %}Scans run when you click Scan now{% endif %}.
+        Pairs are looked for every {{ cfg.scan_interval_minutes|interval_label }} over the last {{ cfg.scan_days }} days (Check now: the whole history), and {% if cfg.auto_merge %}merged right away (auto-sync is on){% else %}wait in Not synced for a click on Merge (auto-sync is off){% endif %}.
         Each watch point gets the Zwift position closest in time (within {{ cfg.time_tolerance_s }} s); everything else in the watch file is kept.
         Nothing is deleted before the merged activity is on Garmin. Backups stay in <code>data/zwift_backups</code>.
     </p>

@@ -8,7 +8,6 @@
     <h1>Liftosaur</h1>
     <p>Your Liftosaur workouts as Garmin strength activities, with exercises, sets and heart rate.</p>
 </div>
-{{ ui.liftosaur_tabs("/liftosaur/workouts") }}
 {% if lift.configured %}
 {% include "partials/liftosaur_sync_card.html" %}
 {% else %}
@@ -46,7 +45,7 @@
     {% set restore_off = "No copy of the watch activity from before the sync: it is kept for syncs made since version 1.6" %}
     {% set extra %}<button type="button" class="chip" onclick="unsyncWorkout('{{ w.id }}', this)" title="Forget the sync so this workout can be synced again. Garmin is not changed.">Unsync</button>{% endset %}
 {% else %}
-    {% set badges = [('failed', 'Failed')] if w.failure else [('pending', 'Not on Garmin')] %}
+    {% set badges = [('failed', 'Failed')] if w.failure else [('pending', 'Not synced')] %}
     {% set resync = {"label": "Sync", "title": "Send this workout to Garmin", "attrs": 'hx-post="/api/sync/' ~ w.id ~ '" hx-disabled-elt="this"'} %}
     {% set restore = none %}{% set restore_off = "Not synced: Garmin was not changed" %}{% set extra = "" %}
 {% endif %}

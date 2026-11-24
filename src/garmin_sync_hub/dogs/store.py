@@ -38,6 +38,10 @@ class DogsState:
     interval_minutes: int = 60
     tagged: dict[str, list[int]] = field(default_factory=dict)  # activity id -> dogs set by us
     restored: list[int] = field(default_factory=list)  # activities whose dogs Restore removed: never re-added on its own
+    # Activities the rules give a dog to that do not have it yet ("not synced"), newest first:
+    # {id, name, start, dogs}. Found by every check, even with auto-sync off.
+    pending: list[dict[str, Any]] = field(default_factory=list)
+    last_check: str | None = None
     # Dogs added and failures, newest first: {id, name, start, dogs, at, ok, error}
     recent: list[dict[str, Any]] = field(default_factory=list)
     last_run: str | None = None

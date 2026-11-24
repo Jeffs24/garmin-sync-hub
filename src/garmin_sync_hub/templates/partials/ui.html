@@ -9,14 +9,6 @@
 </nav>
 {%- endmacro %}
 
-{% macro liftosaur_tabs(current) -%}
-{{ subtabs([("/liftosaur/workouts", "Workouts"), ("/liftosaur/mappings", "Mappings")], current) }}
-{%- endmacro %}
-
-{% macro zwift_tabs(current) -%}
-{{ subtabs([("/zwift", "Pairs"), ("/zwift/account", "History and files")], current) }}
-{%- endmacro %}
-
 {# Filter tabs: links to base_url?param=key, with a count each. `alert` keys turn red when not empty. #}
 {% macro filter_tabs(base_url, param, current, labels, counts, alert=(), aria_label="Filter") -%}
 <nav class="tabs" aria-label="{{ aria_label }}">

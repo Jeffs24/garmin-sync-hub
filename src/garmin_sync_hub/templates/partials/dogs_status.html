@@ -1,5 +1,5 @@
-{# Dogs: jobs (find, preview, apply), automatic tagging and the last activities tagged.
-   Refreshes itself every 2 s while a job runs. Needs the context of DogsModule ctx(). #}
+{# Dogs: the top card, like the other sources: counts, Check now, Sync all, auto-sync, and the job in
+   progress. Refreshes itself every 2 s while a job runs. Needs the context of DogsModule ctx(). #}
 {% import "partials/ui.html" as ui %}
 {% set p = job.progress %}
 <div id="dogs-status" class="card source-top src-dogs"
@@ -8,29 +8,30 @@
         <div>
             <div class="source-top-main">
                 {% set n = s.tagged.values()|select|list|length %}
-                {% if running %}{{ jobs[job.kind] }}…{% else %}{{ n }} activit{{ 'y' if n == 1 else 'ies' }} {{ 'has its' if n == 1 else 'have their' }} dog{% endif %}
+                {% if running %}{{ jobs[job.kind] }}…{% else %}{{ n }} activit{{ 'y' if n == 1 else 'ies' }} {{ 'has its' if n == 1 else 'have their' }} dog{% if s.pending %} · <span class="state-pending">{{ s.pending|length }} not synced</span>{% endif %}{% endif %}
             </div>
             <div class="source-top-meta">
+                {% if s.last_check %}Last check {{ ui.local_time(s.last_check|fromiso) }} · {% endif %}
                 {% if s.last_run %}Last sync {{ ui.local_time(s.last_run|fromiso) }} · {% endif %}
-                {{ s.rules|length }} rule{{ '' if s.rules|length == 1 else 's' }} · {{ s.dogs|length }} dog{{ '' if s.dogs|length == 1 else 's' }} · <a href="/settings#dogs">Change</a>
+                {{ s.rules|length }} rule{{ '' if s.rules|length == 1 else 's' }} · {{ s.dogs|length }} dog{{ '' if s.dogs|length == 1 else 's' }} · <a href="/settings#dogs">Settings</a>
             </div>
         </div>
         <div class="source-top-actions">
             {% if running %}
             <button class="btn btn-secondary btn-sm" hx-post="/dogs/stop" hx-target="#dogs-status" hx-swap="outerHTML">Stop</button>
-            {% else %}
-            <button class="btn btn-secondary btn-sm" hx-post="/dogs/run/discover" hx-target="#dogs-status" hx-swap="outerHTML"
+            {% elif not s.dogs %}
+            <button class="btn btn-primary btn-sm" hx-post="/dogs/run/discover" hx-target="#dogs-status" hx-swap="outerHTML"
                     {% if not garmin_connected %}disabled{% endif %}>Find my dogs</button>
-            {% if s.rules %}
-            <button class="btn btn-primary btn-sm" hx-post="/dogs/run/auto" hx-target="#dogs-status" hx-swap="outerHTML"
-                    title="Add the dogs to your latest 100 activities" {% if not garmin_connected %}disabled{% endif %}>Sync now</button>
-            <button class="btn btn-secondary btn-sm" hx-post="/dogs/run/preview" hx-target="#dogs-status" hx-swap="outerHTML"
-                    {% if not garmin_connected %}disabled{% endif %}>Preview past activities</button>
-            {% endif %}
+            {% else %}
+            <button class="btn btn-secondary btn-sm" hx-post="/dogs/run/check" hx-target="#dogs-status" hx-swap="outerHTML"
+                    title="Look through your whole history for activities missing their dog. Nothing changes on Garmin."
+                    {% if not garmin_connected or not s.rules %}disabled{% endif %}>Check now</button>
+            <button class="btn btn-primary btn-sm" hx-post="/dogs/run/sync" hx-target="#dogs-status" hx-swap="outerHTML"
+                    hx-confirm="Add the dogs to the {{ s.pending|length }} activities not synced? Dogs already on them are kept."
+                    {% if not garmin_connected or not s.pending %}disabled{% endif %}>Sync all ({{ s.pending|length }})</button>
             {% endif %}
         </div>
     </div>
-
     {% if running and p %}
     <div style="margin-top: 12px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary);">
         <span class="spinner"></span>
@@ -44,35 +45,21 @@
     <p style="font-size: 13px; margin-top: 10px;" class="{{ 'state-ok' if job.result.found else 'state-pending' }}">
         {% if job.result.found %}Found {{ job.result.found|length }} dog{{ '' if job.result.found|length == 1 else 's' }}
             ({% for dog, activity in job.result.found.items() %}{{ s.dog_name(dog) }}{% if activity %} on “{{ activity }}”{% endif %}{{ ', ' if not loop.last }}{% endfor %}).
-            {% if job.result.unnamed %}Give {{ 'it' if job.result.unnamed|length == 1 else 'them' }} a name below.{% endif %}
+            {% if job.result.unnamed %}Give {{ 'it' if job.result.unnamed|length == 1 else 'them' }} a name in <a href="/settings#dogs">Settings → Dogs</a>.{% endif %}
         {% else %}No dog found on your Garmin profile. Add your dog in the Garmin Connect app, then try again.{% endif %}
     </p>
-    {% elif job.kind == "preview" and job.result is not none %}
-    <div style="margin-top: 12px;">
-        {% set r = job.result %}
-        <p class="form-hint">Checked {{ r.checked }} activities{% if r.oldest %}, back to {{ r.oldest }}{% endif %}:
-            {{ r.matching_total }} match the rules.</p>
-        {% if r.near_misses %}
-        <details class="form-hint" style="margin: 4px 0 8px;">
-            <summary style="cursor: pointer;">Similar names that match no rule ({{ r.near_misses|length }})</summary>
-            <ul style="margin: 4px 0 0 18px;">{% for name, count in r.near_misses %}<li>“{{ name }}” × {{ count }}</li>{% endfor %}</ul>
-            <div>Add a rule (or use “contains”) to include them.</div>
-        </details>
-        {% endif %}
-        {% if matches %}
-        <p style="font-size: 13px;">{{ matches|length }} activit{{ 'y' if matches|length == 1 else 'ies' }} to update
-            (activities that already have the dog are skipped when applying):</p>
-        <ul style="margin: 6px 0 0 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.7; max-height: 220px; overflow-y: auto;">
-            {% for a in matches[:200] %}<li>{{ a.start.replace('T', ' ') }} · {{ a.name }} → {% for d in a.dogs %}{{ s.dog_name(d) }}{{ ', ' if not loop.last }}{% endfor %}</li>{% endfor %}
-            {% if matches|length > 200 %}<li>… and {{ matches|length - 200 }} more</li>{% endif %}
-        </ul>
-        <button class="btn btn-primary btn-sm" style="margin-top: 10px;" hx-post="/dogs/run/apply" hx-target="#dogs-status" hx-swap="outerHTML"
-                hx-confirm="Add the dogs to these {{ matches|length }} activities on Garmin Connect? Dogs already on them are kept.">Add to {{ matches|length }} activit{{ 'y' if matches|length == 1 else 'ies' }}</button>
-        {% else %}
-        <p class="state-ok" style="font-size: 13px;">Nothing to do: every matching activity already has its dog.</p>
-        {% endif %}
-    </div>
-    {% elif job.kind in ("apply", "auto", "scheduled") and job.result is not none %}
+    {% elif job.kind == "check" and job.result is not none %}
+    {% set r = job.result %}
+    <p class="form-hint" style="margin-top: 10px;">Checked {{ r.checked }} activities{% if r.oldest %}, back to {{ r.oldest }}{% endif %}:
+        {{ r.missing }} missing their dog, listed below as not synced.</p>
+    {% if r.near_misses %}
+    <details class="form-hint" style="margin: 4px 0 0;">
+        <summary style="cursor: pointer;">Similar names that match no rule ({{ r.near_misses|length }})</summary>
+        <ul style="margin: 4px 0 0 18px;">{% for name, count in r.near_misses %}<li>“{{ name }}” × {{ count }}</li>{% endfor %}</ul>
+        <div>Add a rule (or use “contains”) in <a href="/settings#dogs">Settings → Dogs</a> to include them.</div>
+    </details>
+    {% endif %}
+    {% elif job.kind in ("sync", "apply", "auto", "scheduled") and job.result is not none and (job.result.tagged or job.result.already) %}
     <p class="state-ok" style="font-size: 13px; margin-top: 10px;">
         Done: dog added to {{ job.result.tagged or 0 }} activit{{ 'y' if job.result.tagged == 1 else 'ies' }}{% if job.result.already %}, {{ job.result.already }} already had it{% endif %}.
     </p>
@@ -85,7 +72,7 @@
     {% endif %}
 
     <div class="autosync-block">
-        {{ ui.autosync_control("dogs-autosync", "/dogs/autosync", s.auto, s.interval_minutes, intervals, "Auto-sync", "the latest 100 activities", autosync_line|safe) }}
+        {{ ui.autosync_control("dogs-autosync", "/dogs/autosync", s.auto, s.interval_minutes, intervals, "Auto-sync", "add the dogs found", autosync_line|safe) }}
         {% if s.last_error %}<div class="state-failed autosync-status">Last automatic run: {{ s.last_error }}</div>{% endif %}
     </div>
 

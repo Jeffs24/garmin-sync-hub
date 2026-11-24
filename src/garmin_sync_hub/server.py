@@ -355,7 +355,7 @@ def liftosaur_autosync_line(status: dict[str, Any]) -> str:
     """The line under the Liftosaur auto-sync switch (same macro as Zwift)."""
     return templating.render_autosync_line(
         _jinja_env, status["enabled"], status.get("last_at"), status.get("next_at"),
-        "workouts sync only when you click “Sync now”.")
+        "new workouts show up as not synced and wait for a click on Sync.")
 
 
 def _get_autosync_status() -> dict[str, Any]:
@@ -510,6 +510,17 @@ async def logout():
 
 # ── Pages ────────────────────────────────────────────────────────────────────
 
+LIFT_CACHE_TTL = timedelta(minutes=5)  # saved Liftosaur lists and counts are read again after this
+
+
+def _fresh(at: str | None, ttl: timedelta) -> bool:
+    """Whether a cache entry saved at ``at`` (ISO time) is younger than ``ttl``."""
+    try:
+        return datetime.now(timezone.utc) - datetime.fromisoformat(at) < ttl
+    except (TypeError, ValueError):
+        return False
+
+
 def _liftosaur_summary(config: dict) -> dict[str, Any]:
     """Counts and auto-sync state of the Liftosaur module, without slow API calls when possible."""
     configured = bool(config.get("liftosaur_api_key"))
@@ -518,15 +529,17 @@ def _liftosaur_summary(config: dict) -> dict[str, Any]:
     if configured:
         try:
             # Cached count first (instant), Liftosaur API otherwise
+            # Cached count first (instant); read again after a few minutes so a new workout
+            # shows up as not synced even when auto-sync is off.
             _db = db.get_db()
             cached = _db.get_app_config("workout_total")
-            if cached and isinstance(cached, dict):
+            if cached and isinstance(cached, dict) and _fresh(cached.get("at"), LIFT_CACHE_TTL):
                 total = cached.get("count", 0)
             else:
                 from garmin_sync_hub.liftosaur.liftosaur import LiftosaurClient
 
                 total = LiftosaurClient(api_key=config.get("liftosaur_api_key")).get_workout_count()
-                _db.set_app_config("workout_total", {"count": total})
+                _db.set_app_config("workout_total", {"count": total, "at": datetime.now(timezone.utc).isoformat()})
         except Exception:
             pass
     sync_log = db.get_sync_log(1)
@@ -553,7 +566,7 @@ def _activity_feed() -> list:
     # A retry time only means something while the automation that retries is on.
     retrying = {
         "liftosaur": bool(load_config().get("auto_sync", {}).get("enabled")),
-        "zwift": zwift_module.cfg.auto_merge and zwift_module.cfg.auto_scan,
+        "zwift": zwift_module.cfg.auto_merge,
         "dogs": dogs_module.store.state.auto,
         "backup": backup_module.settings.auto,
     }
@@ -623,12 +636,16 @@ async def activity_page(request: Request, source: str = "all", page: int = 1):
     )
 
 
+# Exercise mappings: a page of Settings → Liftosaur (it was Liftosaur → Mappings before 1.6).
+MAPPINGS_URL = "/settings/liftosaur/mappings"
+
 # Pages that moved when the app got one section per source.
 for _old, _new in (
     ("/dashboard", "/"),
     ("/history", "/activity?source=liftosaur"),
     ("/workouts", "/liftosaur/workouts"),
-    ("/mappings", "/liftosaur/mappings"),
+    ("/mappings", MAPPINGS_URL),
+    ("/liftosaur/mappings", MAPPINGS_URL),  # 1.6: a page of Settings → Liftosaur
     ("/liftosaur", "/liftosaur/workouts"),
 ):
     app.add_api_route(_old, (lambda target=_new: RedirectResponse(target, status_code=307)),
@@ -764,7 +781,7 @@ async def api_garmin_export_token_file():
 
 
 # Filter tabs of Liftosaur → Workouts, like the Zwift Pairs page.
-LIFT_FILTERS = {"all": "All", "pending": "Not on Garmin", "synced": "Synced", "failed": "Failed"}
+LIFT_FILTERS = {"all": "All", "pending": "Not synced", "synced": "Synced", "failed": "Failed"}
 LIFT_PAGE_SIZE = 10
 ALL_WORKOUTS_KEY = "workouts_all"
 ALL_WORKOUTS_TTL = timedelta(minutes=10)
@@ -819,16 +836,25 @@ async def workouts_page(request: Request):
         failures = {f["workout_id"]: f for f in _db.get_failures()}
         if status == "all":
             cache_key = f"workouts_page_{page}"
-            # Try DB cache first (populated during sync). Fall back to Liftosaur API on miss.
+            # The saved page while it is recent; otherwise read Liftosaur again, so a new workout
+            # shows up as not synced even when auto-sync is off (the saved page if that fails).
             cached = _db.get_app_config(cache_key)
-            if cached:
-                workouts_raw = cached.get("workouts", [])
-                page_count = cached.get("page_count", 1)
-            else:
-                data = LiftosaurClient(api_key=config.get("liftosaur_api_key")).get_workouts(page=page, page_size=LIFT_PAGE_SIZE)
+            data = None
+            if not (cached and _fresh(cached.get("at"), LIFT_CACHE_TTL)) and config.get("liftosaur_api_key"):
+                try:
+                    data = LiftosaurClient(api_key=config.get("liftosaur_api_key")).get_workouts(page=page, page_size=LIFT_PAGE_SIZE)
+                except Exception as e:  # noqa: BLE001
+                    if not cached:
+                        raise
+                    logger.warning("Liftosaur not read again, showing the saved page: %s", e)
+            if data is not None:
                 workouts_raw = data.get("workouts", [])
                 page_count = data.get("page_count", 1)
-                _db.set_app_config(cache_key, {"workouts": workouts_raw, "page_count": page_count})
+                _db.set_app_config(cache_key, {"workouts": workouts_raw, "page_count": page_count,
+                                               "at": datetime.now(timezone.utc).isoformat()})
+            else:
+                workouts_raw = (cached or {}).get("workouts", [])
+                page_count = (cached or {}).get("page_count", 1)
         else:
             everything = await run_in_threadpool(_all_workouts, config)
             synced_ids = {r["workout_id"] for r in _db.get_all_synced()}
@@ -1092,7 +1118,7 @@ async def workout_page(workout_id: str):
     return RedirectResponse(f"/liftosaur/workouts?page={page}#{_workout_anchor(workout_id)}", status_code=303)
 
 
-@app.get("/liftosaur/mappings", response_class=HTMLResponse)
+@app.get(MAPPINGS_URL, response_class=HTMLResponse)
 async def mappings_page(request: Request):
     from garmin_sync_hub.liftosaur.mapper import EXERCISE_TO_GARMIN, _custom_mappings, _ensure_custom_loaded
 
@@ -1150,10 +1176,25 @@ async def settings_page(request: Request):
             unmapped[name] = count
     except Exception:
         pass
+    from garmin_sync_hub.backup.settings import BACKUP_INTERVALS
+    from garmin_sync_hub.backup.web import backup_autosync_line
+    from garmin_sync_hub.dogs.store import DOG_INTERVALS
+    from garmin_sync_hub.zwift.config import SCAN_INTERVALS
+    from garmin_sync_hub.zwift.web import autosync_status as zwift_autosync_status
+
+    lift_autosync = _get_autosync_status()
+    upload_results, zwift_module.state["upload_results"] = zwift_module.state.get("upload_results") or [], []
     return _render(
         "settings.html",
         config=config,
         flow=_liftosaur_flow(config),
+        # The auto-sync switch of each source, as on its page
+        lift_autosync=lift_autosync, lift_intervals=_VALID_AUTOSYNC_INTERVALS,
+        lift_autosync_line=liftosaur_autosync_line(lift_autosync),
+        zwift_intervals=SCAN_INTERVALS, zwift_autosync_line=zwift_autosync_status(zwift_module),
+        zwift_upload_results=upload_results,
+        dogs_intervals=DOG_INTERVALS, dogs_autosync_line=dogs_module.autosync_line(),
+        backup_intervals=BACKUP_INTERVALS, backup_autosync_line=backup_autosync_line(backup_module),
         zwift_cfg=zwift_module.cfg,
         zwift_connected=zwift_module.zwift.connected(),
         backup_settings=backup_module.settings,
@@ -1231,7 +1272,7 @@ async def api_save_mapping(request: Request):
 
     exercise = fit_exercise_name(category, subcategory)
     shown = html.escape(f"{cat_label} › {exercise}" if exercise else f"{cat_label} (generic)")
-    return HTMLResponse(f'<div class="toast toast-success">Mapped "{html.escape(exercise_name)}" → {shown} ({category}:{subcategory}). <a href="/liftosaur/mappings">Reload</a></div>')
+    return HTMLResponse(f'<div class="toast toast-success">Mapped "{html.escape(exercise_name)}" → {shown} ({category}:{subcategory}). <a href="{MAPPINGS_URL}">Reload</a></div>')
 
 
 @app.post("/api/mapping/delete", response_class=HTMLResponse)
@@ -1257,7 +1298,7 @@ async def api_delete_mapping(request: Request):
             pass
     _custom_mappings.pop(exercise_name, None)
 
-    return HTMLResponse(f'<div class="toast toast-success">Deleted mapping for "{exercise_name}". <a href="/liftosaur/mappings">Reload</a></div>')
+    return HTMLResponse(f'<div class="toast toast-success">Deleted mapping for "{exercise_name}". <a href="{MAPPINGS_URL}">Reload</a></div>')
 
 
 @app.get("/api/validate-liftosaur")
@@ -1500,6 +1541,17 @@ async def api_undo_workout(request: Request, workout_id: str):
     _clear_workout_pages()
     logger.info("Undid workout %s (deleted Garmin activity %s)", workout_id, garmin_id)
     return HTMLResponse("", headers={"HX-Redirect": _with_notice(request, "undone", _workout_anchor(workout_id))})
+
+
+@app.post("/api/liftosaur/check")
+async def api_liftosaur_check(request: Request):
+    """Check now: forget the saved Liftosaur lists and counts, so the page reads them again.
+    New workouts then show up as not synced. Nothing changes on Garmin."""
+    _clear_workout_pages()
+    _db = db.get_db()
+    _db.set_app_config("workout_total", {})
+    _db.set_app_config(ALL_WORKOUTS_KEY, {})
+    return HTMLResponse("", headers={"HX-Refresh": "true"})
 
 
 @app.post("/api/workouts/{workout_id}/restore")

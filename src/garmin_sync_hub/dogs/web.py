@@ -26,12 +26,13 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 _env = templating.register(Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True))
 
 # Filter tabs of the Dogs history, like Liftosaur and Zwift: key -> label.
-HISTORY_FILTERS = {"all": "All", "added": "Dog added", "failed": "Failed", "restored": "Restored"}
+HISTORY_FILTERS = {"all": "All", "pending": "Not synced", "added": "Synced", "failed": "Failed", "restored": "Restored"}
 PAGE_SIZE = 10
 
 
-def history(recent: list[dict]) -> list[dict]:
-    """One entry per activity, its latest (the log is newest first), with its state for the tabs."""
+def history(recent: list[dict], pending: list[dict] = ()) -> list[dict]:
+    """One entry per activity, with its state for the tabs: what the log says last (newest
+    first), then the activities found by the checks that still miss their dog ("not synced")."""
     seen: set = set()
     rows = []
     for e in recent:
@@ -40,7 +41,8 @@ def history(recent: list[dict]) -> list[dict]:
         seen.add(e.get("id"))
         state = "failed" if not e.get("ok", True) else "restored" if e.get("restored") else "added"
         rows.append({**e, "state": state})
-    return rows
+    waiting = [{**p, "state": "pending"} for p in pending if p.get("id") not in seen]
+    return waiting + rows
 
 
 def _back_with_notice(request: Request, key: str, anchor: str) -> str:
@@ -52,9 +54,13 @@ def _back_with_notice(request: Request, key: str, anchor: str) -> str:
     return f"{current.path or '/dogs'}?{urlencode(query)}#{anchor}"
 
 
-JOBS = {"discover": "Looking for your dogs", "preview": "Finding matching activities",
-        "apply": "Adding dogs to past activities", "auto": "Adding dogs to new activities",
-        "scheduled": "Adding dogs to new activities"}
+JOBS = {"discover": "Looking for your dogs", "check": "Checking your whole history",
+        "sync": "Adding the dogs", "scheduled": "Checking your latest activities",
+        # before 1.6
+        "preview": "Finding matching activities", "apply": "Adding dogs to past activities",
+        "auto": "Adding dogs to new activities"}
+# Buttons of before 1.6, still posted by old pages: Preview past activities, Add to N, Sync now.
+OLD_KINDS = {"preview": "check", "apply": "sync", "auto": "check"}
 
 
 def _render(name: str, request: Request | None, **ctx) -> HTMLResponse:
@@ -105,8 +111,17 @@ class DogsModule:
             elif kind == "preview":
                 self.matches = tagger.preview()
                 self.job["result"] = {"matching": len(self.matches), **tagger.scan}
+            elif kind == "check":
+                found = tagger.check(full=True)
+                self.job["result"] = {"missing": len(found), **tagger.scan}
+            elif kind == "sync":
+                tagger.sync_pending()
+                self.job["result"] = dict(progress.counts)
+            elif kind == "scheduled":
+                tagger.scheduled(auto=self.store.state.auto)
+                self.job["result"] = dict(progress.counts)
             else:
-                tagger.run(full=kind == "apply", scheduled=kind == "scheduled")
+                tagger.run(full=kind == "apply")
                 self.matches = []
                 self.job["result"] = dict(progress.counts)
             self.store.state.last_error = None
@@ -134,10 +149,13 @@ class DogsModule:
     # --- schedule -----------------------------------------------------------
 
     def _due(self) -> datetime | None:
+        """Next automatic check: always once there are rules (auto-sync only decides whether
+        the dogs are added too)."""
         s = self.store.state
-        if not s.auto or not s.rules:
+        if not s.rules:
             return None
-        last = datetime.fromisoformat(s.last_run) if s.last_run else None
+        times = [datetime.fromisoformat(t) for t in (s.last_run, s.last_check) if t]
+        last = max(times) if times else None
         return (last + timedelta(minutes=s.interval_minutes)) if last else datetime.now(timezone.utc)
 
     def _loop(self) -> None:
@@ -167,11 +185,21 @@ class DogsModule:
         return {
             "dogs": len(s.dogs), "rules": len(s.rules), "dog_names": list(s.dogs.values()),
             "tagged": sum(1 for v in s.tagged.values() if v),
+            "pending": len(s.pending),
             "failed": sum(1 for e in s.recent if not e.get("ok", True)),
             "auto": s.auto and bool(s.rules), "interval_minutes": s.interval_minutes,
             "next_run": self._due(), "running": self.running, "last_error": s.last_error,
             "last_run": datetime.fromisoformat(s.last_run) if s.last_run else None,
         }
+
+    def autosync_line(self) -> str:
+        """The line under the auto-sync switch (Dogs page and Settings → Dogs)."""
+        s = self.store.state
+        last = datetime.fromisoformat(s.last_run) if s.last_run else None
+        return templating.render_autosync_line(
+            _env, s.auto and bool(s.rules), last, self._due(),
+            f"activities missing their dog are still found every {templating.interval_label(s.interval_minutes)} "
+            "and wait in “Not synced” for a click." if s.rules else "add a rule first (Settings → Dogs).")
 
     # --- routes -------------------------------------------------------------
 
@@ -180,13 +208,8 @@ class DogsModule:
         m = self
 
         def ctx() -> dict:
-            s = m.store.state
-            last = datetime.fromisoformat(s.last_run) if s.last_run else None
-            line = templating.render_autosync_line(_env, s.auto and bool(s.rules), last, m._due(),
-                                                   "dogs are added only from “Preview past activities”."
-                                                   if s.rules else "add a rule first.")
-            return {"s": s, "job": m.job, "jobs": JOBS, "running": m.running, "matches": m.matches,
-                    "match_modes": MATCH_MODES, "intervals": DOG_INTERVALS, "autosync_line": line,
+            return {"s": m.store.state, "job": m.job, "jobs": JOBS, "running": m.running, "matches": m.matches,
+                    "match_modes": MATCH_MODES, "intervals": DOG_INTERVALS, "autosync_line": m.autosync_line(),
                     "garmin_connected": m.garmin.has_tokens()}
 
         def back(error: str | None = None, saved: bool = False, to: str = "") -> RedirectResponse:
@@ -197,7 +220,7 @@ class DogsModule:
 
         @router.get("", response_class=HTMLResponse)
         def page(request: Request) -> HTMLResponse:
-            rows = history(m.store.state.recent)
+            rows = history(m.store.state.recent, m.store.state.pending)
             status = request.query_params.get("status", "all")
             if status not in HISTORY_FILTERS:
                 status = "all"
@@ -261,20 +284,28 @@ class DogsModule:
 
         @router.get("/status", response_class=HTMLResponse)
         def status(request: Request) -> HTMLResponse:
-            return _render("partials/dogs_status.html", request, **ctx())
+            response = _render("partials/dogs_status.html", request, **ctx())
+            # The status card polls while a job runs: once it is done, reload the page so the
+            # list shows what the check found or what the sync changed.
+            if not m.running and m.job.get("kind") in ("check", "sync") and request.headers.get("HX-Trigger") == "dogs-status":
+                response.headers["HX-Refresh"] = "true"
+            return response
 
         @router.post("/run/{kind}", response_class=HTMLResponse)
         def run(request: Request, kind: str) -> HTMLResponse:
-            if kind not in ("discover", "preview", "apply", "auto"):
+            kind = OLD_KINDS.get(kind, kind)
+            if kind not in ("discover", "check", "sync"):
                 raise HTTPException(404)
             if not m.garmin.has_tokens():
                 raise HTTPException(409, "Connect Garmin first (Settings → Garmin).")
             if kind != "discover" and not m.store.state.rules:
-                raise HTTPException(409, "Add a rule first (Dogs page).")
+                raise HTTPException(409, "Add a rule first (Settings → Dogs).")
             started = m.start_job(kind)
             response = _render("partials/dogs_status.html", request, **ctx())
-            if kind == "auto":  # "Sync now": the latest 100 activities
-                message = "Dogs sync started on your latest activities." if started else "A dogs job is already running."
+            if kind != "discover":
+                message = ({"check": "Checking your whole history: activities missing their dog show up as not synced.",
+                            "sync": "Adding the dogs to the activities not synced."}[kind]
+                           if started else "A dogs job is already running.")
                 response.headers["HX-Trigger"] = templating.notice_headers(message, "success" if started else "info")["HX-Trigger"]
             return response
 
@@ -326,7 +357,7 @@ class DogsModule:
             except ValueError as e:
                 return HTMLResponse(f"<span class='state-failed'>{html.escape(str(e))}</span>")
             m._wake.set()
-            return HTMLResponse(ctx()["autosync_line"])
+            return HTMLResponse(m.autosync_line())
 
         for path in ("/dog", "/rules", "/stop", "/autosync"):
             router.add_api_route(path, lambda: RedirectResponse("/dogs", status_code=303),

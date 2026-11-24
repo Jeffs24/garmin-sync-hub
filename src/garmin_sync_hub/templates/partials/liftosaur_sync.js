@@ -85,7 +85,7 @@ async function syncNow() {
     }
 
     if (_syncStopped && synced > 0) {
-        text.textContent = 'Paused after ' + synced + ' workouts. Click Sync now to resume.';
+        text.textContent = 'Paused after ' + synced + ' workouts. Click Sync all to resume.';
     }
 
     progress.style.display = 'none';

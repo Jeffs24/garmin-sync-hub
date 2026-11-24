@@ -127,7 +127,7 @@ ZWIFT_STATES = {
     # status: (result, state)
     "merged": ("Map added", "ok"),
     "failed": ("Failed", "failed"),
-    "detected": ("Ready to merge", "pending"),
+    "detected": ("Not synced", "pending"),
     "simulated": ("Simulated, ready to merge", "pending"),
     "queued": ("Queued", "pending"),
     "running": ("Running…", "pending"),

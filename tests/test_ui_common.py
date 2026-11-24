@@ -27,7 +27,7 @@ def test_autosync_line_is_the_same_for_both_sources():
     on = server.liftosaur_autosync_line({"enabled": True, "last_at": last, "next_at": None})
     assert 'datetime="2026-11-22T10:00:00Z"' in on and on.startswith("Last:")
     off = server.liftosaur_autosync_line({"enabled": False})
-    assert off.startswith("Off:") and "Sync now" in off
+    assert off.startswith("Off:") and "not synced" in off  # new workouts still show up
 
 
 def test_liftosaur_autosync_toggle_shows_next_run(client, monkeypatch):
@@ -358,6 +358,40 @@ def test_calorie_estimate_only_for_workouts_not_written_into_a_watch_activity(cl
     finally:
         db.unsync("cal-1"), db.unsync("cal-2")
         _db.set_app_config("workouts_page_1", {})
+
+
+def test_liftosaur_check_now_reads_liftosaur_again(client, monkeypatch):
+    """New workouts show up as not synced: Check now forgets the saved lists, and a saved page
+    older than a few minutes is read again (the saved one is kept when Liftosaur fails)."""
+    _db = db.get_db()
+    _db.set_app_config("workouts_page_1", {"workouts": [{"id": "old", "title": "Old", "exercises": []}], "page_count": 1})
+    _db.set_app_config("workout_total", {"count": 1})
+    r = client.post("/api/liftosaur/check", headers={"HX-Request": "true"})
+    assert r.headers["HX-Refresh"] == "true"
+    assert not _db.get_app_config("workouts_page_1") and not _db.get_app_config("workout_total")
+
+    class FakeLiftosaur:
+        calls = 0
+
+        def __init__(self, *a, **kw):
+            pass
+
+        def get_workouts(self, page=1, page_size=10):
+            FakeLiftosaur.calls += 1
+            return {"workouts": [{"id": "new", "title": "New one", "exercises": []}], "page_count": 1}
+
+        def get_workout_count(self):
+            return 1
+
+    import garmin_sync_hub.liftosaur.liftosaur as liftosaur
+    monkeypatch.setattr(liftosaur, "LiftosaurClient", FakeLiftosaur)
+    monkeypatch.setattr(server, "load_config", lambda: {"liftosaur_api_key": "k", "user_profile": {}, "timing": {}})
+    try:
+        assert "New one" in client.get("/liftosaur/workouts").text
+        assert "New one" in client.get("/liftosaur/workouts").text and FakeLiftosaur.calls == 1  # recent: saved page
+    finally:
+        _db.set_app_config("workouts_page_1", {})
+        _db.set_app_config("workout_total", {})
 
 
 def test_workout_fit_download(client, monkeypatch):

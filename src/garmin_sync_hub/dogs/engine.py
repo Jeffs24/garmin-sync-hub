@@ -142,6 +142,53 @@ class DogTagger(PacedGarmin):
         self.scan = scan_summary(activities, self.store)
         return self.matches
 
+    def check(self, full: bool = False) -> list[dict[str, Any]]:
+        """Find the activities that miss their dog, without changing Garmin: they show up as not
+        synced on the Dogs page. full: the whole history ("Check now"); otherwise the latest ones."""
+        self.p.phase = "check"
+        activities = self.list_activities(max_pages=None if full else RECENT_PAGES)
+        found = self.candidates(activities)
+        state = self.store.state
+        checked = {int(a["activityId"]) for a in activities}
+        # What was not looked at this time stays; what was is replaced by what was found.
+        state.pending = found + [p for p in state.pending if p["id"] not in checked]
+        state.pending.sort(key=lambda p: p.get("start") or "", reverse=True)
+        self.scan = scan_summary(activities, self.store)
+        state.last_check = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self.p.counts["checked"], self.p.counts["missing"] = len(activities), len(found)
+        return found
+
+    def sync_pending(self) -> None:
+        """Sync all: add the dogs to every activity found by the checks."""
+        todo = list(self.store.state.pending)
+        self.p.phase, self.p.total, self.p.done = "tag", len(todo), 0
+        try:
+            for item in reversed(todo):  # oldest first
+                self.tag(item)
+                self.p.done += 1
+                if self.p.done % 10 == 0:
+                    self.store.save()
+        finally:
+            self.store.state.last_run = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            self.store.save()
+
+    def scheduled(self, auto: bool) -> None:
+        """The automatic run: check the latest activities, and add the dogs when auto-sync is on
+        (failures wait for their next try, like Liftosaur and Zwift)."""
+        self.check(full=False)
+        if not auto:
+            return
+        held = self._held_failures()
+        todo = [p for p in self.store.state.pending if p["id"] not in held]
+        self.p.phase, self.p.total, self.p.done = "tag", len(todo), 0
+        try:
+            for item in reversed(todo):
+                self.tag(item)
+                self.p.done += 1
+        finally:
+            self.store.state.last_run = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            self.store.save()
+
     def _held_failures(self) -> set[int]:
         now = datetime.now(timezone.utc)
         held = set()
@@ -170,6 +217,8 @@ class DogTagger(PacedGarmin):
     def tag(self, item: dict[str, Any]) -> None:
         state = self.store.state
         activity_id = str(item["id"])
+        # Handled now: no longer "not synced" (a failure shows as failed instead).
+        state.pending = [p for p in state.pending if p["id"] != int(item["id"])]
         try:
             details = self.call(self.g.get_activity, activity_id) or {}
             metadata = dict(details.get("metadataDTO") or {})
@@ -200,6 +249,7 @@ class DogTagger(PacedGarmin):
         details = self.call(self.g.get_activity, str(activity_id)) or {}
         name = details.get("activityName") or ""
         start = str((details.get("summaryDTO") or {}).get("startTimeLocal") or "")[:16]
+        start = start or next((p.get("start") or "" for p in state.pending if p["id"] == activity_id), "")
         dogs = state.dogs_for(name)
         if not dogs:
             raise ValueError(f"No rule gives a dog to “{name}”")

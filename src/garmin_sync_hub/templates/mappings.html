@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% import "partials/ui.html" as ui %}
-{% block title %}Mappings · Liftosaur · garmin-sync-hub{% endblock %}
+{% block title %}Exercise mappings · Settings · garmin-sync-hub{% endblock %}
 
 {% block head %}
 <style>
@@ -27,11 +27,11 @@
 {% endblock %}
 
 {% block content %}
+<p style="margin-bottom: 8px;"><a href="/settings#liftosaur">← Settings → Liftosaur</a></p>
 <div class="page-header">
-    <h1>Liftosaur</h1>
-    <p>Your Liftosaur workouts as Garmin strength activities, with exercises, sets and heart rate.</p>
+    <h1>Exercise mappings</h1>
+    <p>Which Garmin exercise each Liftosaur exercise becomes. A setting of Liftosaur, like the others in Settings.</p>
 </div>
-{{ ui.liftosaur_tabs("/liftosaur/mappings") }}
 <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 20px;">{{ total }} Liftosaur exercises mapped to Garmin FIT categories. When you upload a workout, each exercise is translated so it displays correctly in Garmin Connect.</p>
 
 {% if imported_from_file %}

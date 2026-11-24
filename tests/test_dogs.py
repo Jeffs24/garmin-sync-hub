@@ -244,6 +244,16 @@ def test_dogs_page_lists_activities_with_the_same_buttons(hub, monkeypatch):
         m.store.state.recent = []
 
 
+def test_check_finds_missing_dogs_even_with_auto_sync_off(store):
+    g = FakeGarmin(n_walks=2)
+    t = tagger(store, g)
+    t.scheduled(auto=False)  # the automatic run with auto-sync off: finds, changes nothing
+    assert [p["id"] for p in store.state.pending] == [102, 100] and g.puts == []
+    assert store.state.last_check
+    t.scheduled(auto=True)  # on: adds the dogs too
+    assert store.state.pending == [] and len(g.puts) == 2
+
+
 def test_dogs_page_flow(hub, monkeypatch):
     c, m = hub
     page = c.get("/dogs").text
@@ -264,13 +274,17 @@ def test_dogs_page_flow(hub, monkeypatch):
 
     g = FakeGarmin()
     monkeypatch.setattr(m.garmin, "client", lambda: g)
-    assert m.run_job("preview")
+    # Check now: the activities missing their dog show up as not synced, Garmin is not changed
+    assert m.run_job("check")
+    assert g.puts == []
     page = c.get("/dogs").text
-    assert "3 activities to update" in page and "Add to 3 activities" in page
-    assert m.run_job("apply")
+    assert "3 not synced" in page and "Sync all (3)" in page and page.count("Not synced</span>") >= 3
+    assert "/dogs/activities/104/resync" in page
+    # Sync all
+    assert m.run_job("sync")
     page = c.get("/dogs").text
     assert "Done: dog added to 3 activities" in page and "3 activities have their dog" in page
-    assert "connect.garmin.com/modern/activity/104" in page
+    assert "connect.garmin.com/modern/activity/104" in page and m.store.state.pending == []
 
     r = c.post("/dogs/autosync", data={"enabled": "true", "interval": "60"})
     assert "Next:" in r.text and m.store.state.auto is True

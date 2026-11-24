@@ -18,9 +18,11 @@
 
 {% for a in history %}
 {% set names %}{% for d in a.dogs %}{{ s.dog_name(d) }}{{ ', ' if not loop.last }}{% endfor %}{% endset %}
-{% set badge = {"added": ("ok", names ~ " added"), "restored": ("muted", names ~ " removed"), "failed": ("failed", "Failed")}[a.state] %}
+{% set badge = {"pending": ("pending", "Not synced"), "added": ("ok", names ~ " added"), "restored": ("muted", names ~ " removed"),
+                "failed": ("failed", "Failed")}[a.state] %}
 {% set hx = 'hx-disabled-elt="this"' %}
 {% set resync = {"title": "Add the dogs the rules give to this activity" ~ (" (Restore removed them; automatic runs leave it alone)" if a.state == "restored" else ""),
+                 "label": "Sync" if a.state == "pending" else none,
                  "attrs": 'hx-post="/dogs/activities/' ~ a.id ~ '/resync" ' ~ hx} %}
 {% if a.state == "added" %}
     {% set restore = {"title": "Remove the dogs this app added; dogs that were already there stay",
@@ -28,9 +30,10 @@
 {% else %}{% set restore = none %}{% endif %}
 {% set meta %}{{ a.start.replace('T', ' ') if a.start else "" }}{% if a.at %} &middot; {{ "Changed" if a.state != "failed" else "Tried" }} {{ ui.local_time(a.at|fromiso) }}{% endif %}{% endset %}
 {% set actions = ui.history_actions(garmin="https://connect.garmin.com/modern/activity/" ~ a.id, resync=resync, restore=restore,
-                                    restore_off="Restored already" if a.state == "restored" else "No dog added by this app to remove",
+                                    restore_off="Restored already" if a.state == "restored" else "Not synced: Garmin was not changed" if a.state == "pending" else "No dog added by this app to remove",
                                     fit="/dogs/activities/" ~ a.id ~ "/fit") %}
 {% call ui.history_card("dog-" ~ a.id, "dogs", a.name or ("#" ~ a.id), [badge], meta, actions) %}
+    {% if a.state == "pending" %}<div class="hist-note">Missing: {{ names }}</div>{% endif %}
     {% if a.state == "failed" %}
     <div class="state-failed">{{ names }}: {{ a.error }}</div>
     {% if a.retry_at and s.auto %}<div class="hist-note">Next try with auto-sync: {{ ui.local_time(a.retry_at|fromiso) }}</div>{% endif %}
@@ -40,22 +43,14 @@
 
 {% if not history %}
 <div class="card" style="text-align: center; padding: 48px 20px;">
-    <p style="color: var(--text-secondary); font-weight: 500;">{{ "No activity with this status" if total_history else "No dog added yet" }}</p>
-    <p style="font-size: 13px; margin-top: 4px;">{% if total_history %}<a href="/dogs">Show all</a>{% else %}<span style="color: var(--text-muted);">Activities show up here once a dog is added to them.</span>{% endif %}</p>
+    <p style="color: var(--text-secondary); font-weight: 500;">{{ "No activity with this status" if total_history else ("No activity found yet" if s.rules else "No dog yet" if not s.dogs else "No rule yet") }}</p>
+    <p style="font-size: 13px; margin-top: 4px;">{% if total_history %}<a href="/dogs">Show all</a>
+        {% elif not s.dogs %}<span style="color: var(--text-muted);">Click <b>Find my dogs</b> above, then add a rule in <a href="/settings#dogs">Settings → Dogs</a>.</span>
+        {% elif not s.rules %}<span style="color: var(--text-muted);">Add a rule in <a href="/settings#dogs">Settings → Dogs</a>: activity name → your dog.</span>
+        {% else %}<span style="color: var(--text-muted);">Click <b>Check now</b> to look through your whole history.</span>{% endif %}</p>
 </div>
 {% endif %}
 
 {{ ui.pager("/dogs" ~ ("?status=" ~ status_filter if status_filter != "all" else ""), page, page_count) }}
-
-<div class="card" style="margin-top: 20px;">
-    <div class="card-title" style="margin-bottom: 6px;">Dogs and rules</div>
-    {% if s.dogs %}
-    <ul style="margin: 0 0 0 18px; font-size: 14px; line-height: 1.8;">
-        {% for rule in s.rules %}<li>Activity name {{ match_modes[rule.match] }} “{{ rule.name }}” → {{ s.dog_name(rule.dog_id) }}</li>{% else %}<li class="form-hint">No rule yet.</li>{% endfor %}
-    </ul>
-    {% else %}
-    <p class="form-hint">No dog yet: click <b>Find my dogs</b> above.</p>
-    {% endif %}
-    <p class="form-hint" style="margin-top: 8px;">Name your dogs and change the rules in <a href="/settings#dogs">Settings → Dogs</a>.</p>
-</div>
+{{ ui.how_it_works("dogs") }}
 {% endblock %}
