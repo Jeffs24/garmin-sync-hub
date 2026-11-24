@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import tempfile
@@ -22,6 +23,7 @@ from garmin_sync_hub.garmin import (
     update_exercise_sets,
     upload_fit,
 )
+from garmin_sync_hub.liftosaur import originals
 from garmin_sync_hub.liftosaur.liftosaur import LiftosaurClient
 from garmin_sync_hub.liftosaur.mapper import lookup_exercise
 
@@ -331,6 +333,7 @@ def update_existing_activity_sets(garmin_client, activity_id: int, workout: dict
     if not garmin_sets:
         logger.info("  No exercise sets found on Garmin activity %s", activity_id)
         return False
+    originals.save_once(garmin_client, activity_id, copy.deepcopy(garmin_sets))  # for Restore
 
     # Remove false-detection sets (0 reps)
     garmin_sets = _remove_zero_rep_sets(garmin_sets, workout)

@@ -100,23 +100,16 @@
 
 {% endif %}
 {% if tab == "pairs" %}
-{% if total_pairs %}
 {{ ui.filter_tabs("/zwift", "status", status_filter, filter_labels, filter_counts, alert=("failed",), aria_label="Filter pairs") }}
+{% for r in rows %}{% include "partials/zwift_pair_row.html" %}{% endfor %}
+{% if not rows and total_pairs %}
+<div class="card" style="text-align: center; padding: 48px 20px;"><p style="color: var(--text-secondary); font-weight: 500;">No pair with this status</p>
+    <p style="font-size: 13px; margin-top: 4px;"><a href="/zwift">Show all</a></p></div>
+{% elif not rows %}
+<div class="card" style="text-align: center; padding: 48px 20px;"><p style="color: var(--text-secondary); font-weight: 500;">No watch + Zwift pair found yet</p>
+    <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">Connect your Zwift account in <a href="/settings#zwift">Settings → Zwift</a>, or upload Zwift FIT files in <a href="/zwift/account">History and files</a>.</p></div>
 {% endif %}
-{% if rows %}
-<div class="card" style="padding: 0; overflow-x: auto;">
-    <table>
-        <thead><tr><th>Start</th><th>Watch</th><th>Zwift</th><th>Status</th><th></th></tr></thead>
-        <tbody>
-        {% for r in rows %}{% include "partials/zwift_pair_row.html" %}{% endfor %}
-        </tbody>
-    </table>
-</div>
-{% elif total_pairs %}
-<div class="card"><p class="empty">No pair with this status. <a href="/zwift">Show all</a></p></div>
-{% else %}
-<div class="card"><p class="zw-msg">No watch + Zwift pair found yet. Connect your Zwift account in <a href="/settings#zwift">Settings → Zwift</a>, or upload Zwift FIT files in <a href="/zwift/account">History and files</a>.</p></div>
-{% endif %}
-{% with open = not total_pairs %}{% include "partials/zwift_flow.html" %}{% endwith %}
+{{ ui.pager("/zwift" ~ ("?status=" ~ status_filter if status_filter != "all" else ""), page, page_count) }}
+{{ ui.how_it_works("zwift") }}
 {% endif %}
 {% endblock %}

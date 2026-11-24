@@ -28,6 +28,67 @@
 </nav>
 {%- endmacro %}
 
+{# ── History lists (Liftosaur, Zwift, Dogs, Backup): same tabs, card, buttons and pager ── #}
+
+{# One activity. actions: HTML of the buttons (history_actions). The body goes in a call block. #}
+{% macro history_card(anchor, source, title, badges, meta, actions, attrs="") -%}
+<div class="card hist-card src-{{ source }}" id="{{ anchor }}" {{ attrs|safe }}>
+    <div class="hist-head">
+        <span class="hist-title">{{ title }}</span>
+        {% for state, label in badges %}{{ status_badge(state, label) }}{% endfor %}
+    </div>
+    {% if meta %}<div class="hist-meta">{{ meta }}</div>{% endif %}
+    <div class="hist-actions">{{ actions }}</div>
+    {% if caller %}<div class="hist-body">{{ caller() }}</div>{% endif %}
+</div>
+{%- endmacro %}
+
+{% set _icons = {
+    "garmin": '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
+    "resync": '<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>',
+    "restore": '<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/>',
+    "fit": '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+} %}
+{% macro _icon(name) -%}
+<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{{ _icons[name]|safe }}</svg>
+{%- endmacro %}
+
+{# The four buttons every card has, in the same order. Each one is a dict, or a text saying why it is
+   not available (shown on hover, button greyed out):
+   garmin: URL of the activity on Garmin Connect
+   resync / restore: {"attrs": hx-* or onclick attributes, "title": what it does, "label": optional}
+   fit: URL of the FIT file to download
+   extra: HTML of buttons specific to the source, shown after the four. #}
+{% macro history_actions(garmin=none, resync=none, restore=none, fit=none, extra="", garmin_off="Not on Garmin yet",
+                         resync_off="Nothing to sync again", restore_off="Nothing to restore", fit_off="No FIT file") -%}
+{% if garmin %}<a class="chip chip-ok" href="{{ garmin }}" target="_blank" rel="noopener" title="Open on Garmin Connect">{{ _icon("garmin") }} Garmin</a>
+{%- else %}<span class="chip chip-off" title="{{ garmin_off }}">{{ _icon("garmin") }} Garmin</span>{% endif %}
+{% if resync %}<button type="button" class="chip {{ resync.cls or '' }}" title="{{ resync.title }}" {{ resync.attrs|safe }}>{{ _icon("resync") }} {{ resync.label or "Re-sync" }}</button>
+{%- else %}<span class="chip chip-off" title="{{ resync_off }}">{{ _icon("resync") }} Re-sync</span>{% endif %}
+{% if restore %}<button type="button" class="chip chip-fail" title="{{ restore.title }}" {{ restore.attrs|safe }}>{{ _icon("restore") }} {{ restore.label or "Restore" }}</button>
+{%- else %}<span class="chip chip-off" title="{{ restore_off }}">{{ _icon("restore") }} Restore</span>{% endif %}
+{% if fit %}<a class="chip" href="{{ fit }}" title="Download the FIT file" download>{{ _icon("fit") }} FIT</a>
+{%- else %}<span class="chip chip-off" title="{{ fit_off }}">{{ _icon("fit") }} FIT</span>{% endif %}
+{{ extra }}
+{%- endmacro %}
+
+{# Previous / next pages. url: the page URL without ?page (other parameters kept by `query`). #}
+{% macro pager(url, page, page_count, query="") -%}
+{% if page_count > 1 %}
+{% set sep = "&" if "?" in url else "?" %}
+<nav class="pager" aria-label="Pages">
+    <a class="btn btn-secondary btn-sm {{ 'off' if page <= 1 }}" href="{{ url }}{{ sep }}page={{ page - 1 }}{{ query }}">Prev</a>
+    <span>Page <strong>{{ page }}</strong> of <strong>{{ page_count }}</strong></span>
+    <a class="btn btn-secondary btn-sm {{ 'off' if page >= page_count }}" href="{{ url }}{{ sep }}page={{ page + 1 }}{{ query }}">Next</a>
+</nav>
+{% endif %}
+{%- endmacro %}
+
+{# "How it works" now lives in Settings: a link to it from the source page. #}
+{% macro how_it_works(anchor) -%}
+<p class="hist-note" style="text-align: center; margin-top: 20px;"><a href="/settings#{{ anchor }}">How it works, and the options, in Settings → {{ anchor|capitalize }}</a></p>
+{%- endmacro %}
+
 {% macro feed_tabs(base_url, param, current, counts) -%}
 {{ filter_tabs(base_url, param, current, {"all": "All", "liftosaur": "Liftosaur", "zwift": "Zwift", "dogs": "Dogs", "backup": "Backup", "attention": "Needs attention"}, counts, alert=("attention",), aria_label="Filter activity") }}
 {%- endmacro %}
@@ -101,7 +162,7 @@
         <td>
             {{ status_badge(e.state, e.result) }}
             {% if e.retry_at %}<div class="detail">Next try with {{ e.retry_by }}: {{ local_time(e.retry_at) }}</div>{% endif %}
-            {% if e.garmin_url %}<div class="detail"><a href="{{ e.garmin_url }}" target="_blank" rel="noopener">View on Garmin &nearr;</a></div>{% endif %}
+            {% if e.garmin_url %}<div class="detail" style="margin-top: 4px;"><a class="chip chip-ok" href="{{ e.garmin_url }}" target="_blank" rel="noopener" title="Open on Garmin Connect">{{ _icon("garmin") }} Garmin</a></div>{% endif %}
         </td>
     </tr>
     {% endfor %}

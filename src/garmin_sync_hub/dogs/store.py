@@ -37,6 +37,7 @@ class DogsState:
     auto: bool = False
     interval_minutes: int = 60
     tagged: dict[str, list[int]] = field(default_factory=dict)  # activity id -> dogs set by us
+    restored: list[int] = field(default_factory=list)  # activities whose dogs Restore removed: never re-added on its own
     # Dogs added and failures, newest first: {id, name, start, dogs, at, ok, error}
     recent: list[dict[str, Any]] = field(default_factory=list)
     last_run: str | None = None

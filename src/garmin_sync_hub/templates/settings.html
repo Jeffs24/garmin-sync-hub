@@ -402,6 +402,11 @@
 {# Dogs: their own forms, so outside the main form #}
 {% include "partials/dogs_settings.html" %}
 
+{# How it works of each source, with its drawing (moved here from the source pages). #}
+<div data-tab="liftosaur" class="section">{% with open = false %}{% include "partials/liftosaur_flow.html" %}{% endwith %}</div>
+{% if zwift_cfg %}<div data-tab="zwift" class="section">{% with open = false, cfg = zwift_cfg %}{% include "partials/zwift_flow.html" %}{% endwith %}</div>{% endif %}
+{% with root = backup_root, s = backup_settings %}{% include "partials/backup_about.html" %}{% endwith %}
+
 {% if unmapped %}
 <div class="card" style="margin-top: 28px;" data-tab="liftosaur">
     <div class="card-header">

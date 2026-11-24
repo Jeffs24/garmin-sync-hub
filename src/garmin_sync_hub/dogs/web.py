@@ -9,12 +9,12 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from jinja2 import Environment, FileSystemLoader
 
 from .. import templating
 from ..auth import auth_enabled
-from ..backup.engine import AnyEvent, Progress, StopBackup
+from ..backup.engine import AnyEvent, Progress, StopBackup, find_activity_file
 from ..backup.settings import backup_dir
 from ..garmin_session import shared_session
 from .engine import DogTagger
@@ -24,6 +24,33 @@ log = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 _env = templating.register(Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True))
+
+# Filter tabs of the Dogs history, like Liftosaur and Zwift: key -> label.
+HISTORY_FILTERS = {"all": "All", "added": "Dog added", "failed": "Failed", "restored": "Restored"}
+PAGE_SIZE = 10
+
+
+def history(recent: list[dict]) -> list[dict]:
+    """One entry per activity, its latest (the log is newest first), with its state for the tabs."""
+    seen: set = set()
+    rows = []
+    for e in recent:
+        if e.get("id") in seen:
+            continue
+        seen.add(e.get("id"))
+        state = "failed" if not e.get("ok", True) else "restored" if e.get("restored") else "added"
+        rows.append({**e, "state": state})
+    return rows
+
+
+def _back_with_notice(request: Request, key: str, anchor: str) -> str:
+    """The page the HTMX request came from (keeps its tab and page), with a notice."""
+    from urllib.parse import parse_qsl, urlsplit
+
+    current = urlsplit(request.headers.get("HX-Current-URL") or "/dogs")
+    query = [(k, v) for k, v in parse_qsl(current.query) if k not in ("saved", "error")] + [("saved", key)]
+    return f"{current.path or '/dogs'}?{urlencode(query)}#{anchor}"
+
 
 JOBS = {"discover": "Looking for your dogs", "preview": "Finding matching activities",
         "apply": "Adding dogs to past activities", "auto": "Adding dogs to new activities",
@@ -170,7 +197,67 @@ class DogsModule:
 
         @router.get("", response_class=HTMLResponse)
         def page(request: Request) -> HTMLResponse:
-            return _render("dogs.html", request, **ctx())
+            rows = history(m.store.state.recent)
+            status = request.query_params.get("status", "all")
+            if status not in HISTORY_FILTERS:
+                status = "all"
+            counts = {k: (len(rows) if k == "all" else sum(1 for r in rows if r["state"] == k)) for k in HISTORY_FILTERS}
+            chosen = rows if status == "all" else [r for r in rows if r["state"] == status]
+            try:
+                page_no = max(1, int(request.query_params.get("page", 1)))
+            except ValueError:
+                page_no = 1
+            page_count = max(1, -(-len(chosen) // PAGE_SIZE))
+            page_no = min(page_no, page_count)
+            return _render("dogs.html", request, **ctx(), history=chosen[(page_no - 1) * PAGE_SIZE: page_no * PAGE_SIZE],
+                           status_filter=status, filter_labels=HISTORY_FILTERS, filter_counts=counts,
+                           page=page_no, page_count=page_count, total_history=len(rows))
+
+        def one_activity(request: Request, activity_id: int, action: str) -> HTMLResponse:
+            """Re-sync or Restore of one activity, right away (a few Garmin requests)."""
+            if not m.garmin.has_tokens():
+                return HTMLResponse("", headers=templating.notice_headers("Connect Garmin first (Settings → Garmin).", "error"))
+            if not m._lock.acquire(blocking=False):
+                return HTMLResponse("", headers=templating.notice_headers("A dogs job is running: try again when it is done.", "info"))
+            try:
+                tagger = m._tagger(Progress())
+                if action == "resync":
+                    tagger.resync(activity_id)
+                else:
+                    tagger.restore(activity_id)
+            except (ValueError, StopBackup) as e:
+                return HTMLResponse("", headers=templating.notice_headers(str(e), "error"))
+            except Exception as e:  # noqa: BLE001
+                log.exception("Dogs %s of %s failed", action, activity_id)
+                return HTMLResponse("", headers=templating.notice_headers(f"Garmin did not take it: {e}", "error"))
+            finally:
+                m.store.save()
+                m._lock.release()
+            key = "dogs-added" if action == "resync" else "dogs-removed"
+            return HTMLResponse("", headers={"HX-Redirect": _back_with_notice(request, key, f"dog-{activity_id}")})
+
+        @router.post("/activities/{activity_id}/resync", response_class=HTMLResponse)
+        def resync_activity(request: Request, activity_id: int) -> HTMLResponse:
+            return one_activity(request, activity_id, "resync")
+
+        @router.post("/activities/{activity_id}/restore", response_class=HTMLResponse)
+        def restore_activity(request: Request, activity_id: int) -> HTMLResponse:
+            return one_activity(request, activity_id, "restore")
+
+        @router.get("/activities/{activity_id}/fit")
+        def activity_file(activity_id: int):
+            """The activity's original file: the backup copy, else downloaded from Garmin."""
+            saved = find_activity_file(backup_dir(), activity_id)
+            if saved:
+                return FileResponse(saved, filename=saved.name, media_type="application/octet-stream")
+            if not m.garmin.has_tokens():
+                raise HTTPException(409, "Connect Garmin first (Settings → Garmin).")
+            try:
+                _raw, fit = m.garmin.original_fit(activity_id)
+            except Exception as e:  # noqa: BLE001
+                raise HTTPException(502, f"Garmin did not send the file: {e}") from None
+            return Response(fit, media_type="application/octet-stream",
+                            headers={"Content-Disposition": f'attachment; filename="{activity_id}.fit"'})
 
         @router.get("/status", response_class=HTMLResponse)
         def status(request: Request) -> HTMLResponse:

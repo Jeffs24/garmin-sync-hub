@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from jinja2 import Environment, FileSystemLoader
@@ -763,29 +763,79 @@ async def api_garmin_export_token_file():
     return FileResponse(path, filename=path.name, media_type="application/json")
 
 
+# Filter tabs of Liftosaur → Workouts, like the Zwift Pairs page.
+LIFT_FILTERS = {"all": "All", "pending": "Not on Garmin", "synced": "Synced", "failed": "Failed"}
+LIFT_PAGE_SIZE = 10
+ALL_WORKOUTS_KEY = "workouts_all"
+ALL_WORKOUTS_TTL = timedelta(minutes=10)
+
+
+def _all_workouts(config: dict[str, Any]) -> list[dict]:
+    """Every Liftosaur workout, newest first, kept a few minutes: the filter tabs page through it."""
+    _db = db.get_db()
+    cached = _db.get_app_config(ALL_WORKOUTS_KEY) or {}
+    try:
+        fresh = datetime.now(timezone.utc) - datetime.fromisoformat(cached["at"]) < ALL_WORKOUTS_TTL
+    except (KeyError, TypeError, ValueError):
+        fresh = False
+    if fresh:
+        return cached.get("workouts") or []
+    from garmin_sync_hub.liftosaur.liftosaur import LiftosaurClient
+
+    workouts = list(LiftosaurClient(api_key=config.get("liftosaur_api_key")).iter_history())
+    _db.set_app_config(ALL_WORKOUTS_KEY, {"at": datetime.now(timezone.utc).isoformat(), "workouts": workouts})
+    return workouts
+
+
+def _filter_workouts(workouts: list[dict], status: str, synced_ids: set[str], failed_ids: set[str]) -> list[dict]:
+    if status == "pending":
+        return [w for w in workouts if w.get("id") not in synced_ids]
+    if status == "synced":
+        return [w for w in workouts if w.get("id") in synced_ids]
+    if status == "failed":
+        return [w for w in workouts if w.get("id") in failed_ids]
+    return workouts
+
+
 @app.get("/liftosaur/workouts", response_class=HTMLResponse)
 async def workouts_page(request: Request):
+    from garmin_sync_hub.liftosaur import originals
+
     config = load_config()
     workouts = []
-    page = int(request.query_params.get("page", 1))
+    try:
+        page = max(1, int(request.query_params.get("page", 1)))
+    except ValueError:
+        page = 1
+    status = request.query_params.get("status", "all")
+    if status not in LIFT_FILTERS:
+        status = "all"
     page_count = 1
     fetch_error = None
     try:
         from garmin_sync_hub.liftosaur.liftosaur import LiftosaurClient
 
         _db = db.get_db()
-        cache_key = f"workouts_page_{page}"
-
-        # Try DB cache first (populated during sync). Fall back to Liftosaur API on miss.
-        cached = _db.get_app_config(cache_key)
-        if cached:
-            workouts_raw = cached.get("workouts", [])
-            page_count = cached.get("page_count", 1)
+        failures = {f["workout_id"]: f for f in _db.get_failures()}
+        if status == "all":
+            cache_key = f"workouts_page_{page}"
+            # Try DB cache first (populated during sync). Fall back to Liftosaur API on miss.
+            cached = _db.get_app_config(cache_key)
+            if cached:
+                workouts_raw = cached.get("workouts", [])
+                page_count = cached.get("page_count", 1)
+            else:
+                data = LiftosaurClient(api_key=config.get("liftosaur_api_key")).get_workouts(page=page, page_size=LIFT_PAGE_SIZE)
+                workouts_raw = data.get("workouts", [])
+                page_count = data.get("page_count", 1)
+                _db.set_app_config(cache_key, {"workouts": workouts_raw, "page_count": page_count})
         else:
-            data = LiftosaurClient(api_key=config.get("liftosaur_api_key")).get_workouts(page=page, page_size=10)
-            workouts_raw = data.get("workouts", [])
-            page_count = data.get("page_count", 1)
-            _db.set_app_config(cache_key, {"workouts": workouts_raw, "page_count": page_count})
+            everything = await run_in_threadpool(_all_workouts, config)
+            synced_ids = {r["workout_id"] for r in _db.get_all_synced()}
+            chosen = _filter_workouts(everything, status, synced_ids, set(failures))
+            page_count = max(1, -(-len(chosen) // LIFT_PAGE_SIZE))
+            page = min(page, page_count)
+            workouts_raw = chosen[(page - 1) * LIFT_PAGE_SIZE: page * LIFT_PAGE_SIZE]
 
         # Batch check sync status (1 query instead of N)
         workout_ids = [w.get("id", "") for w in workouts_raw]
@@ -813,8 +863,11 @@ async def workouts_page(request: Request):
                     w["garmin_match"] = {"garmin_id": gid, "garmin_name": w.get("title", "")}
                 if w["id"] in stale_ids:
                     w["edited_since_sync"] = True
+                # Restore: delete what this app uploaded, or put back the watch activity saved before the sync.
+                w["can_restore"] = w["sync_action"] == "uploaded" or bool(gid and originals.path(gid).exists())
             else:
                 w["status"] = "pending"
+            w["failure"] = failures.get(w["id"])
 
             # Calculate calorie breakdown for display
             try:
@@ -854,8 +907,10 @@ async def workouts_page(request: Request):
         fetch_error = str(e)
     hr_fusion = config.get("hr_fusion", {}).get("enabled", True)
     lift = _liftosaur_summary(config)
+    counts = {"all": lift["total"], "pending": lift["pending"], "synced": lift["synced"], "failed": lift["failed"]}
     return _render("workouts.html", workouts=workouts, hr_fusion_enabled=hr_fusion, page=page, page_count=page_count,
-                   fetch_error=fetch_error, lift=lift, flow=_liftosaur_flow(config), request=request)
+                   fetch_error=fetch_error, lift=lift, status_filter=status, filter_labels=LIFT_FILTERS,
+                   filter_counts=counts, request=request)
 
 
 def _liftosaur_flow(config: dict[str, Any]) -> dict[str, Any]:
@@ -1098,6 +1153,7 @@ async def settings_page(request: Request):
     return _render(
         "settings.html",
         config=config,
+        flow=_liftosaur_flow(config),
         zwift_cfg=zwift_module.cfg,
         zwift_connected=zwift_module.zwift.connected(),
         backup_settings=backup_module.settings,
@@ -1373,6 +1429,7 @@ async def api_sync_single(request: Request, workout_id: str):
                 rename_activity(garmin_client, aid, workout["title"])
                 set_description(garmin_client, aid, generate_description(workout, calories=result.get("calories"), avg_hr=result.get("avg_hr")))
             db.mark_synced(workout_id=workout_id, garmin_activity_id=str(aid) if aid else None, title=workout["title"], calories=result.get("calories"), avg_hr=result.get("avg_hr"), source_updated_at=workout.get("updated_at"), action="updated" if existing_id else "uploaded")
+        _refresh_cached_workout(workout)
 
         # Reload the page so the card shows its new status, with a notice.
         return HTMLResponse("", headers={"HX-Redirect": _with_notice(request, "workout", _workout_anchor(workout_id))})
@@ -1440,6 +1497,88 @@ async def api_undo_workout(request: Request, workout_id: str):
     _clear_workout_pages()
     logger.info("Undid workout %s (deleted Garmin activity %s)", workout_id, garmin_id)
     return HTMLResponse("", headers={"HX-Redirect": _with_notice(request, "undone", _workout_anchor(workout_id))})
+
+
+@app.post("/api/workouts/{workout_id}/restore")
+async def api_restore_workout(request: Request, workout_id: str):
+    """Restore: put Garmin back as it was before this workout was synced.
+
+    Uploaded as a new activity: the activity is deleted (same as Undo). Written into the watch
+    activity: its sets, name and description saved before the first sync are written back.
+    """
+    from garmin_sync_hub.garmin import get_client, rename_activity, set_description, update_exercise_sets
+    from garmin_sync_hub.liftosaur import originals
+
+    action = db.get_db().get_sync_actions([workout_id]).get(workout_id)
+    if action == "uploaded":
+        return await api_undo_workout(request, workout_id)
+    garmin_id = db.get_garmin_id(workout_id)
+    if not db.is_synced(workout_id) or not garmin_id:
+        return htmx_notice("This workout is not synced.")
+    saved = originals.load(garmin_id)
+    if not saved:
+        return htmx_notice("No copy of the watch activity from before the sync: it is kept only for syncs "
+                           "made since version 1.6.")
+
+    def put_back() -> None:
+        client = get_client(load_config().get("garmin_email"))
+        update_exercise_sets(client, int(garmin_id), saved.get("exercise_sets") or [])
+        if saved.get("name"):
+            rename_activity(client, int(garmin_id), saved["name"])
+        set_description(client, int(garmin_id), saved.get("description") or "")
+
+    try:
+        await run_in_threadpool(put_back)
+    except Exception as e:  # noqa: BLE001 - keep the sync record: nothing was restored
+        logger.warning("Restore of %s (Garmin %s) failed: %s", workout_id, garmin_id, e)
+        return htmx_notice(f"Garmin did not take the restore: {e}")
+    db.unsync(workout_id)
+    originals.forget(garmin_id)
+    return HTMLResponse("", headers={"HX-Redirect": _with_notice(request, "restored", _workout_anchor(workout_id))})
+
+
+def _find_workout(workout_id: str) -> dict | None:
+    """A Liftosaur workout from the saved pages, else from the whole history."""
+    _db = db.get_db()
+    for page in range(1, WORKOUT_LOOKUP_MAX_PAGES + 1):
+        for w in (_db.get_app_config(f"workouts_page_{page}") or {}).get("workouts") or []:
+            if isinstance(w, dict) and str(w.get("id")) == str(workout_id):
+                return w
+    return next((w for w in _all_workouts(load_config()) if str(w.get("id")) == str(workout_id)), None)
+
+
+@app.get("/api/workouts/{workout_id}/fit")
+async def api_workout_fit(workout_id: str):
+    """The FIT file this app makes from the Liftosaur workout (what Upload sends to Garmin)."""
+    import tempfile
+
+    from garmin_sync_hub.liftosaur.fit import generate_fit
+
+    workout = await run_in_threadpool(_find_workout, workout_id)
+    if not workout:
+        return JSONResponse({"error": "Workout not found in Liftosaur"}, status_code=404)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "workout.fit"
+        generate_fit(workout, hr_samples=None, output_path=str(path))
+        data = path.read_bytes()
+    name = re.sub(r"[^A-Za-z0-9_-]+", "-", f"{workout.get('start_time', '')[:10]}_{workout.get('title', 'workout')}").strip("-")
+    return Response(data, media_type="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{name}.fit"'})
+
+
+def _refresh_cached_workout(workout: dict) -> None:
+    """Replace the saved copy of this workout (Workouts pages and the whole history used by the
+    filters) with the one just fetched, so an edit made in Liftosaur shows after a re-sync."""
+    _db = db.get_db()
+    keys = [f"workouts_page_{page}" for page in range(1, WORKOUT_LOOKUP_MAX_PAGES + 1)] + [ALL_WORKOUTS_KEY]
+    for cache_key in keys:
+        cached = _db.get_app_config(cache_key)
+        workouts = (cached or {}).get("workouts") or []
+        for i, w in enumerate(workouts):
+            if isinstance(w, dict) and str(w.get("id")) == str(workout.get("id")):
+                workouts[i] = workout
+                _db.set_app_config(cache_key, {**cached, "workouts": workouts})
+                break
 
 
 def _clear_workout_pages() -> None:

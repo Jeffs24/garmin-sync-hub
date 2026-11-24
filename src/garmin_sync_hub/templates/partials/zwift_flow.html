@@ -72,6 +72,5 @@
         {% if cfg.auto_scan %}Scans run every {{ cfg.scan_interval_minutes|interval_label }}{% else %}Scans run when you click Scan now{% endif %}.
         Each watch point gets the Zwift position closest in time (within {{ cfg.time_tolerance_s }} s); everything else in the watch file is kept.
         Nothing is deleted before the merged activity is on Garmin. Backups stay in <code>data/zwift_backups</code>.
-        <a href="/settings#zwift">Change these options</a>
     </p>
 </details>

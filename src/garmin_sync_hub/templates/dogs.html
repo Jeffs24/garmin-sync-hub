@@ -2,8 +2,6 @@
 {% import "partials/ui.html" as ui %}
 {% block title %}Dogs · garmin-sync-hub{% endblock %}
 
-
-
 {% block content %}
 <div class="page-header">
     <h1>Dogs</h1>
@@ -16,7 +14,40 @@
 
 {% include "partials/dogs_status.html" %}
 
-<div class="card">
+{{ ui.filter_tabs("/dogs", "status", status_filter, filter_labels, filter_counts, alert=("failed",), aria_label="Filter activities") }}
+
+{% for a in history %}
+{% set names %}{% for d in a.dogs %}{{ s.dog_name(d) }}{{ ', ' if not loop.last }}{% endfor %}{% endset %}
+{% set badge = {"added": ("ok", names ~ " added"), "restored": ("muted", names ~ " removed"), "failed": ("failed", "Failed")}[a.state] %}
+{% set hx = 'hx-disabled-elt="this"' %}
+{% set resync = {"title": "Add the dogs the rules give to this activity" ~ (" (Restore removed them; automatic runs leave it alone)" if a.state == "restored" else ""),
+                 "attrs": 'hx-post="/dogs/activities/' ~ a.id ~ '/resync" ' ~ hx} %}
+{% if a.state == "added" %}
+    {% set restore = {"title": "Remove the dogs this app added; dogs that were already there stay",
+                      "attrs": 'hx-post="/dogs/activities/' ~ a.id ~ '/restore" ' ~ hx ~ ' hx-confirm="Remove the dogs this app added to this activity on Garmin? Automatic runs will not add them back; Re-sync does."'} %}
+{% else %}{% set restore = none %}{% endif %}
+{% set meta %}{{ a.start.replace('T', ' ') if a.start else "" }}{% if a.at %} &middot; {{ "Changed" if a.state != "failed" else "Tried" }} {{ ui.local_time(a.at|fromiso) }}{% endif %}{% endset %}
+{% set actions = ui.history_actions(garmin="https://connect.garmin.com/modern/activity/" ~ a.id, resync=resync, restore=restore,
+                                    restore_off="Restored already" if a.state == "restored" else "No dog added by this app to remove",
+                                    fit="/dogs/activities/" ~ a.id ~ "/fit") %}
+{% call ui.history_card("dog-" ~ a.id, "dogs", a.name or ("#" ~ a.id), [badge], meta, actions) %}
+    {% if a.state == "failed" %}
+    <div class="state-failed">{{ names }}: {{ a.error }}</div>
+    {% if a.retry_at and s.auto %}<div class="hist-note">Next try with auto-sync: {{ ui.local_time(a.retry_at|fromiso) }}</div>{% endif %}
+    {% endif %}
+{% endcall %}
+{% endfor %}
+
+{% if not history %}
+<div class="card" style="text-align: center; padding: 48px 20px;">
+    <p style="color: var(--text-secondary); font-weight: 500;">{{ "No activity with this status" if total_history else "No dog added yet" }}</p>
+    <p style="font-size: 13px; margin-top: 4px;">{% if total_history %}<a href="/dogs">Show all</a>{% else %}<span style="color: var(--text-muted);">Activities show up here once a dog is added to them.</span>{% endif %}</p>
+</div>
+{% endif %}
+
+{{ ui.pager("/dogs" ~ ("?status=" ~ status_filter if status_filter != "all" else ""), page, page_count) }}
+
+<div class="card" style="margin-top: 20px;">
     <div class="card-title" style="margin-bottom: 6px;">Dogs and rules</div>
     {% if s.dogs %}
     <ul style="margin: 0 0 0 18px; font-size: 14px; line-height: 1.8;">

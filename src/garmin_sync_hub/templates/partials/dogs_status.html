@@ -89,13 +89,4 @@
         {% if s.last_error %}<div class="state-failed autosync-status">Last automatic run: {{ s.last_error }}</div>{% endif %}
     </div>
 
-    {% set added = s.recent|selectattr("ok", "ne", false)|list %}
-    {% if added %}
-    <div class="autosync-block">
-        <div class="card-title" style="margin-bottom: 6px;">Latest added</div>
-        <ul style="margin: 0 0 0 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.7;">
-            {% for a in added[:10] %}<li>{{ a.start.replace('T', ' ') }} · <a href="https://connect.garmin.com/modern/activity/{{ a.id }}" target="_blank" rel="noopener">{{ a.name }} &nearr;</a> → {% for d in a.dogs %}{{ s.dog_name(d) }}{{ ', ' if not loop.last }}{% endfor %}</li>{% endfor %}
-        </ul>
-    </div>
-    {% endif %}
 </div>

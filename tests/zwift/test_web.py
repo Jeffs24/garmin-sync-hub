@@ -229,17 +229,10 @@ def test_scan_loop_waits_and_wakes_on_settings_change(own_cfg):
     assert done.wait(2)  # on, and a scan is overdue: returns right away
 
 
-def test_pairs_page_explains_the_merge_with_current_settings(own_cfg):
+def test_pairs_page_links_to_how_it_works_in_settings(own_cfg):
     c, m = own_cfg
-    m.cfg.copy_altitude, m.cfg.delete_source = False, True
     page = c.get("/zwift").text
-    assert "How it works" in page and "<details class=\"card pipeline\" open" in page  # open while no pairs
-    assert "watch data + GPS<" in page and "watch + Zwift copy" in page
-    m.cfg.copy_altitude, m.cfg.delete_source = True, False
-    m.store.upsert_detected(1, 2, "Run", "Zwift", "2026-11-20T12:00:00+00:00", 0.97)
-    page = c.get("/zwift").text
-    assert "watch data + GPS + altitude" in page and "watch (copy kept)" in page
-    assert "<details class=\"card pipeline\" open" not in page
+    assert 'href="/settings#zwift">How it works' in page and "card pipeline" not in page  # moved to Settings
 
 
 def test_restore_button_only_for_merged_pairs_with_backups(client, monkeypatch):
@@ -264,11 +257,14 @@ def test_pair_actions_update_the_row_in_place(client, monkeypatch):
     m.store.upsert_detected(1, 2, "Run A", "Zwift A", "2026-11-20T12:00:00+00:00", 0.97)
     monkeypatch.setattr(m.service, "simulate", lambda tid: None)
     r = c.post("/zwift/pairs/1/simulate", headers={"HX-Request": "true"})
-    assert r.status_code == 200 and r.text.lstrip().startswith("<tr")
+    assert r.status_code == 200 and r.text.lstrip().startswith('<div class="card hist-card src-zwift"')
     assert 'id="pair-1"' in r.text and 'hx-get="/zwift/pairs/1/row"' in r.text  # running: refreshes itself
     m.store.set_status(1, "simulated", "ok")
     row = c.get("/zwift/pairs/1/row").text
     assert "hx-trigger" not in row.split(">")[0] and "Simulated, ready to merge" in row
+    # The same four buttons as every card: Garmin, Re-sync (Merge here), Restore (not yet), FIT
+    assert "connect.garmin.com/modern/activity/1" in row and "/zwift/pairs/1/merge" in row
+    assert "/zwift/pairs/1/merged.fit" in row and 'title="Only a merged pair with its backups can be restored"' in row
     assert 'datetime="2026-11-20T12:00:00+00:00"' in row  # shown in local time by the page
     assert c.post("/zwift/pairs/1/ignore", follow_redirects=False).status_code == 303  # without HTMX
 

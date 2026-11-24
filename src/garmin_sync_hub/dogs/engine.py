@@ -121,6 +121,7 @@ class DogTagger(PacedGarmin):
         """
         state = self.store.state
         held = self._held_failures() if scheduled else set()
+        held |= set(state.restored)  # Restore removed their dogs: only Re-sync adds them back
         out = []
         for a in activities:
             if int(a["activityId"]) in held:
@@ -191,8 +192,54 @@ class DogTagger(PacedGarmin):
         except Exception as e:  # noqa: BLE001 - one activity never stops the others
             self._log(item, ok=False, error=str(e))
 
+    def resync(self, activity_id: int) -> None:
+        """Re-sync button: add the dogs the rules give to this activity, even after a Restore."""
+        state = self.store.state
+        if activity_id in state.restored:
+            state.restored.remove(activity_id)
+        details = self.call(self.g.get_activity, str(activity_id)) or {}
+        name = details.get("activityName") or ""
+        start = str((details.get("summaryDTO") or {}).get("startTimeLocal") or "")[:16]
+        dogs = state.dogs_for(name)
+        if not dogs:
+            raise ValueError(f"No rule gives a dog to “{name}”")
+        state.tagged.pop(str(activity_id), None)
+        self.tag({"id": activity_id, "name": name, "start": start or self._start_of(activity_id), "dogs": dogs})
+
+    def restore(self, activity_id: int) -> list[int]:
+        """Restore button: remove the dogs this app added; the dogs that were there before stay.
+        Returns the dogs removed. The activity is then left alone by the automatic runs."""
+        state = self.store.state
+        added: set[int] = set()
+        for e in state.recent:  # newest first: what was added since the last Restore
+            if e["id"] != activity_id or not e.get("ok", True):
+                continue
+            if e.get("restored"):
+                break
+            added.update(e.get("dogs") or [])
+        if not added:
+            raise ValueError("This app added no dog to this activity")
+        details = self.call(self.g.get_activity, str(activity_id)) or {}
+        metadata = dict(details.get("metadataDTO") or {})
+        current = dog_ids(metadata)
+        keep = [d for d in current if d not in added]
+        removed = [d for d in current if d in added]
+        if removed:
+            metadata.update(hasDog=bool(keep), dogProfileIds=keep)
+            self.call(self.g.update_activity, str(activity_id), {"metadataDTO": metadata})
+        state.tagged[str(activity_id)] = keep
+        if activity_id not in state.restored:
+            state.restored.append(activity_id)
+        name = details.get("activityName") or next((e["name"] for e in state.recent if e["id"] == activity_id), "")
+        self._log({"id": activity_id, "name": name, "start": self._start_of(activity_id), "dogs": removed or sorted(added)},
+                  restored=True)
+        return removed
+
+    def _start_of(self, activity_id: int) -> str:
+        return next((e.get("start") or "" for e in self.store.state.recent if e["id"] == activity_id), "")
+
     def _log(self, item: dict[str, Any], *, ok: bool = True, dogs: list[int] | None = None,
-             error: str | None = None) -> None:
+             error: str | None = None, restored: bool = False) -> None:
         """Keep what happened for the Dogs page and the Activity feed (newest first)."""
         attempts = 1 + max((e.get("attempts", 1) for e in self.store.state.recent
                             if not e.get("ok", True) and e["id"] == item["id"]), default=0)
@@ -200,6 +247,8 @@ class DogTagger(PacedGarmin):
         now = datetime.now(timezone.utc)
         entry = {"id": item["id"], "name": item["name"], "start": item["start"], "dogs": dogs or item["dogs"],
                  "at": now.isoformat(timespec="seconds"), "ok": ok}
+        if restored:
+            entry["restored"] = True
         if not ok:
             entry["error"] = (error or "")[:300]
             entry["attempts"] = attempts

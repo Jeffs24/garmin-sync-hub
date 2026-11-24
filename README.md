@@ -37,12 +37,14 @@ Set `HUB_PASSWORD` in `.env` to protect the web UI with a password if it can be 
 
 ## Liftosaur → Garmin
 
-**Liftosaur → Workouts** lists your Liftosaur workouts; sync them one by one or all at once (**Sync now**, also on the Overview). Auto-sync runs on a schedule you choose on the same page. A **How it works** card at the bottom shows what is sent to Garmin, with your current settings.
+**Liftosaur → Workouts** lists your Liftosaur workouts, with tabs by status (All, Not on Garmin, Synced, Failed); sync them one by one or all at once (**Sync now**, also on the Overview). Auto-sync runs on a schedule you choose on the same page. **Settings → Liftosaur** has a **How it works** card that shows what is sent to Garmin, with your current settings.
 
-A synced workout has three actions:
+Every history list (Liftosaur workouts, Zwift pairs, Dogs, Backup) uses the same card, tabs and pages, and every card has the same four buttons, greyed out with the reason when they do not apply: **Garmin** (open the activity), **Re-sync**, **Restore** and **FIT** (download the file). For a workout:
 
-- **Undo** (workouts uploaded as a new activity only): deletes the Garmin activity this app created and makes the workout pending again. A watch activity that was updated with your sets is never deleted.
-- **Re-sync** (after an edit in Liftosaur): uploads the workout again. An uploaded activity is replaced; an updated watch activity gets its sets written again.
+- **Garmin**: the Garmin activity of a synced workout.
+- **Re-sync** (after an edit in Liftosaur): uploads the workout again. An uploaded activity is replaced; an updated watch activity gets its sets written again. On a pending workout, the button is **Sync**.
+- **Restore**: puts Garmin back as it was before the sync, and makes the workout pending again. An activity uploaded by this app is deleted. A watch activity gets back the sets, name and description it had before its first sync (saved in `data/liftosaur_originals/`, for syncs made since 1.6). A watch activity is never deleted.
+- **FIT**: the file this app makes from the workout.
 - **Unsync**: forgets the sync without touching Garmin.
 
 - **Mappings**: Liftosaur exercises are mapped to Garmin's exercise categories. Unmapped exercises show as "Unknown" on Garmin; map them from **Liftosaur → Mappings**, where each mapping shows the exact Garmin exercise (there is no generic one: sub-id 0 is the first exercise of the category).
@@ -64,7 +66,7 @@ For each pair of *watch activity without a map* + *Zwift activity with a map* th
 
 Every Garmin step is checked against the activity list, since Garmin sometimes answers with an error (such as a 504) for a request that went through. If an earlier attempt left the watch activity deleted without a replacement, clicking **Merge** again imports it from the backups.
 
-**Zwift → Pairs** lists the pairs found, with a filter by status. Actions update the row in place, and a pair being merged refreshes itself until it is done. Its **Auto-sync** switch turns the scheduled scan on or off and sets how often it runs; the other Zwift options (merge mode, period scanned, matching thresholds) are in **Settings → Zwift** and apply right away. **Simulate** builds the merged file without touching Garmin, and **Preview** shows it as Garmin will get it: map, stats and charts. **Restore** undoes a merge from the backups: the original watch activity is re-imported first (name, description, type and gear restored), then the merged activity is deleted, and a Zwift copy removed by the merge is brought back. The restored pair stays out of automatic merges. A **How it works** card on the same page shows what the merge takes from each activity, with your current settings.
+**Zwift → Pairs** lists the pairs found, with a filter by status. Actions update the card in place, and a pair being merged refreshes itself until it is done. On a pair, **Re-sync** is **Merge** and **FIT** downloads the merged file. Its **Auto-sync** switch turns the scheduled scan on or off and sets how often it runs; the other Zwift options (merge mode, period scanned, matching thresholds) are in **Settings → Zwift** and apply right away. **Simulate** builds the merged file without touching Garmin, and **Preview** shows it as Garmin will get it: map, stats and charts. **Restore** undoes a merge from the backups: the original watch activity is re-imported first (name, description, type and gear restored), then the merged activity is deleted, and a Zwift copy removed by the merge is brought back. The restored pair stays out of automatic merges. A **How it works** card in **Settings → Zwift** shows what the merge takes from each activity, with your current settings.
 
 ### Zwift account and history
 
@@ -82,6 +84,7 @@ Garmin Connect lets you add your dogs to an activity. **Dogs** does it for you, 
 2. In **Settings → Dogs**, add a rule: activity name *is* (or *contains*, *starts with*) "Dog Walk" → your dog. Case is ignored.
 3. **Preview past activities** lists every matching activity; **Add to N activities** updates them on Garmin Connect. Dogs already on an activity are kept, and nothing else in the activity changes.
 4. **Sync now** (here or on the Overview) checks your latest 100 activities; turn on **Auto-sync** to do it on a schedule. Each dog added, or failure, shows in **Activity**. The preview says how many activities it checked and how far back, and lists similar names that match no rule ("Dog walk with Milo").
+5. The **Dogs** page lists each activity the app changed, with tabs (Dog added, Failed, Restored). **Restore** removes the dogs the app added (dogs that were already there stay), and automatic runs then leave that activity alone; **Re-sync** adds them back. **FIT** downloads the activity's original file, from the backup when it has it.
 
 This uses the same unofficial Garmin Connect API as the rest of the app: the profile's dogs (`gcx.garmin.com/family-api/profile-service/profile/pets`) and the activity's `hasDog` and `dogProfileIds`. Garmin's activity details only say `hasDog`, without the ids, which is why the dogs are read from the profile.
 
@@ -103,6 +106,8 @@ history/<name>/<year>.json           calendar, body composition, weigh-ins, bloo
 ```
 
 Health data covers the days since your first activity (or the date set in **Settings → Backup**, where it can also be turned off). The **Build zip** button makes one zip of everything to download.
+
+The **Backup** page shows what the backup holds, per category (activities by category and year, health days per metric, history years, account files, gear, workouts and courses), and each run as a card with what it added: the new activities (each with **Garmin** and **FIT**), health days, history files, gear, workouts and courses.
 
 **Google Drive, OneDrive, Dropbox, a NAS…**: after each backup, new files can be copied with [rclone](https://rclone.org) (included in the image). Set up the connection once:
 

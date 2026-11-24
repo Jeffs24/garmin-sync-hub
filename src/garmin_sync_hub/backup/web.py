@@ -21,13 +21,27 @@ from .. import retry, templating
 from ..auth import auth_enabled
 from ..garmin_session import GarminAuthRequired, shared_session
 from ..paths import data_dir
-from .engine import AnyEvent, Backup, Progress, StopBackup, folder_size
+from .engine import AnyEvent, Backup, Progress, StopBackup, find_activity_file, folder_size, inventory
 from .rclone_check import check_destination
 from .settings import BACKUP_INTERVALS, BackupSettings, backup_dir
 
 log = logging.getLogger(__name__)
 
 RUNS_KEPT = 100  # backup runs kept for the Activity feed
+PAGE_SIZE = 10
+# Filter tabs of the backup runs, like the other source pages.
+RUN_FILTERS = {"all": "All", "new": "New data", "uptodate": "Up to date", "failed": "Failed or stopped"}
+# What a run can add: key in Progress.added -> (singular, plural).
+ADDED_LABELS = {"activities": ("activity", "activities"), "health_days": ("day of health data", "days of health data"),
+                "history": ("history file", "history files"), "gear": ("piece of gear", "pieces of gear"),
+                "workouts": ("workout", "workouts"), "courses": ("course", "courses")}
+
+
+def run_state(run: dict) -> str:
+    if not run.get("ok"):
+        return "failed"
+    new = run.get("new") or {"activities": run.get("activities_new"), "health_days": run.get("health_days_new")}
+    return "new" if any(new.values()) else "uptodate"
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 _env = templating.register(Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True))
@@ -153,11 +167,22 @@ class BackupModule:
             run = {"at": _iso(finished), "ok": error is None, "stopped": stopped, "error": error,
                    "activities_new": progress.counts.get("activities_new", 0),
                    "health_days_new": progress.counts.get("health_days_new", 0),
+                   "new": {k[:-4]: v for k, v in progress.counts.items() if k.endswith("_new")},
+                   "added": progress.added,
                    "warnings": len(progress.warnings), "retry_at": _iso(retry_at)}
             self.state["runs"] = [run, *(self.state.get("runs") or [])][:RUNS_KEPT]
+            self.refresh_inventory()
             self._save_state()
             self._lock.release()
         return True
+
+    def refresh_inventory(self) -> dict[str, Any]:
+        """Count what the backup holds (after each run, or the first time the page needs it)."""
+        try:
+            self.state["inventory"] = inventory(self.root) if self.root.exists() else {}
+        except OSError as e:
+            log.warning("Could not list the backup: %s", e)
+        return self.state.get("inventory") or {}
 
     def start_run(self) -> bool:
         if self.running:
@@ -275,7 +300,34 @@ class BackupModule:
 
         @router.get("", response_class=HTMLResponse)
         def page(request: Request) -> HTMLResponse:
-            return _render("backup.html", request, **page_ctx())
+            runs = [{**r, "state": run_state(r)} for r in m.state.get("runs") or []]
+            status = request.query_params.get("status", "all")
+            if status not in RUN_FILTERS:
+                status = "all"
+            counts = {k: (len(runs) if k == "all" else sum(1 for r in runs if r["state"] == k)) for k in RUN_FILTERS}
+            chosen = runs if status == "all" else [r for r in runs if r["state"] == status]
+            try:
+                page_no = max(1, int(request.query_params.get("page", 1)))
+            except ValueError:
+                page_no = 1
+            page_count = max(1, -(-len(chosen) // PAGE_SIZE))
+            page_no = min(page_no, page_count)
+            inv = m.state.get("inventory")
+            if inv is None and m.root.exists() and not m.running:
+                inv = m.refresh_inventory()
+                m._save_state()
+            return _render("backup.html", request, **page_ctx(), inventory=inv or {},
+                           runs=chosen[(page_no - 1) * PAGE_SIZE: page_no * PAGE_SIZE], status_filter=status,
+                           filter_labels=RUN_FILTERS, filter_counts=counts, page=page_no, page_count=page_count,
+                           added_labels=ADDED_LABELS, total_runs=len(runs))
+
+        @router.get("/activities/{activity_id}/file")
+        def activity_file(activity_id: int) -> FileResponse:
+            """The file of an activity as saved in the backup."""
+            path = find_activity_file(m.root, activity_id)
+            if not path:
+                raise HTTPException(404, "This activity has no file in the backup")
+            return FileResponse(path, filename=path.name, media_type="application/octet-stream")
 
         @router.get("/status", response_class=HTMLResponse)
         def status(request: Request) -> HTMLResponse:

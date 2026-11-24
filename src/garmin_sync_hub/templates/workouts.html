@@ -8,9 +8,6 @@
         margin-top: 10px;
         border-top: 1px solid var(--border-subtle);
     }
-    /* Opened from a link to one workout (Activity, Overview): show it clearly. */
-    .workout-card { scroll-margin-top: 80px; }
-    .workout-card:target { opacity: 1 !important; outline: 2px solid var(--src-liftosaur); outline-offset: 2px; }
     .cal-detail summary {
         cursor: pointer;
         font-size: 12px;
@@ -95,110 +92,47 @@
     <p style="font-size: 13px; color: var(--text-secondary); margin-top: 6px;">{{ fetch_error }}. Check your Liftosaur API key in <a href="/settings#liftosaur">Settings</a>.</p>
 </div>
 {% endif %}
-<div class="page-header" style="display: flex; justify-content: space-between; align-items: flex-start;">
-    <div>
-        <h2 style="font-size: 18px; font-weight: 700;">Workouts</h2>
-        <p>Recent workouts from Liftosaur with sync status and exercise details</p>
-    </div>
-    {% if page_count > 1 %}
-    <div style="display: flex; align-items: center; gap: 8px;">
-        {% if page > 1 %}
-        <a href="/liftosaur/workouts?page={{ page - 1 }}" class="btn btn-secondary btn-sm" style="text-decoration: none;">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
-        </a>
-        {% else %}
-        <span class="btn btn-secondary btn-sm" style="opacity: 0.3; cursor: default;">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
-        </span>
-        {% endif %}
-        <span style="font-size: 13px; color: var(--text-secondary); font-variant-numeric: tabular-nums;">
-            <strong>{{ page }}</strong> / {{ page_count }}
-        </span>
-        {% if page < page_count %}
-        <a href="/liftosaur/workouts?page={{ page + 1 }}" class="btn btn-secondary btn-sm" style="text-decoration: none;">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
-        </a>
-        {% else %}
-        <span class="btn btn-secondary btn-sm" style="opacity: 0.3; cursor: default;">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
-        </span>
-        {% endif %}
-    </div>
-    {% endif %}
-</div>
+{% if lift.configured %}
+{{ ui.filter_tabs("/liftosaur/workouts", "status", status_filter, filter_labels, filter_counts, alert=("failed",), aria_label="Filter workouts") }}
+{% endif %}
 
 {% for w in workouts %}
-<div class="card workout-card" id="{{ w.id|workout_anchor }}" style="margin-bottom: 12px; {% if w.status != 'pending' %}opacity: 0.65;{% endif %}">
-    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-        <div style="flex: 1;">
-            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
-                <span style="font-weight: 700; font-size: 16px;">{{ w.title }}</span>
-                {% set check %}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>{% endset %}
-                {% if w.status == 'uploaded' %}
-                {% call ui.status_badge('ok', {'uploaded': 'Uploaded', 'updated': 'Watch activity updated'}.get(w.sync_action, 'Synced')) %}{{ check }}{% endcall %}
-                {% if w.edited_since_sync %}
-                {% call ui.status_badge('warning', 'Edited on Liftosaur') %}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>{% endcall %}
-                {% endif %}
-                {% elif w.status == 'matched' %}
-                {% call ui.status_badge('ok', 'On Garmin' ~ ((' as "' ~ w.garmin_match.garmin_name ~ '"') if w.garmin_match and w.garmin_match.garmin_name else '')) %}{{ check }}{% endcall %}
-                {% else %}
-                {{ ui.status_badge('pending', 'Not on Garmin') }}
-                {% endif %}
-            </div>
-            <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 10px;">
-                {{ w.start_time[:10] }} at {{ w.start_time[11:16] }}
-                &middot; {{ w.exercises|length }} exercises
-            </div>
-            <!-- Garmin link and actions -->
-            <div style="display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;">
-                {% if w.garmin_match and w.garmin_match.garmin_id %}
-                <a class="chip chip-ok" href="https://connect.garmin.com/modern/activity/{{ w.garmin_match.garmin_id }}" target="_blank" rel="noopener">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                    Garmin
-                </a>
-                {% endif %}
-                {% if w.status == 'uploaded' %}
-                <button type="button" class="chip{{ ' chip-warn' if w.edited_since_sync }}" onclick="resyncWorkout('{{ w.id }}', this, {{ 'false' if w.sync_action == 'updated' else 'true' }})"
-                    title="{{ 'Write the sets again into the watch activity' if w.sync_action == 'updated' else 'Replace the Garmin activity with a new upload' }}, with the latest Liftosaur data and your current mappings">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-                    Re-sync
-                </button>
-                {% endif %}
-                {% if w.status == 'uploaded' and w.sync_action == 'uploaded' %}
-                <button type="button" class="chip chip-fail" hx-post="/api/workouts/{{ w.id }}/undo" hx-disabled-elt="this"
-                    hx-confirm="Undo this upload? The Garmin activity created for this workout is deleted and the workout becomes pending again."
-                    title="Delete the Garmin activity this app created">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
-                    Undo
-                </button>
-                {% endif %}
-                {% if w.status == 'uploaded' %}
-                <button type="button" class="chip" onclick="unsyncWorkout('{{ w.id }}', this)"
-                    title="Forget the sync so this workout can be synced again. Garmin is not changed.">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6 6 18M6 6l12 12"/></svg>
-                    Unsync
-                </button>
-                {% endif %}
-            </div>
-            <!-- Exercise details -->
-            <div style="margin-top: 4px;">
-                {% for ex in w.exercises %}
-                {% set normal_sets = ex.get('sets', [])|selectattr('type', 'equalto', 'normal')|list %}
-                {% if normal_sets %}
-                {% set weights = normal_sets|map(attribute='weight_kg')|select('number')|list %}
-                {% set reps_list = normal_sets|map(attribute='reps')|select('number')|list %}
-                {% set top_weight = weights|max if weights else 0 %}
-                {% set top_reps = reps_list|max if reps_list else 0 %}
-                <div style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 10px; background: rgba(255,255,255,0.04); border-radius: 8px; color: var(--text-secondary); margin: 2px 4px 2px 0;">
-                    <span>{{ ex.get('title') or ex.get('name', '?') }}</span>
-                    <span style="color: var(--text-muted);">{{ normal_sets|length }}x</span>
-                    <span style="color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums;">{{ "%.1f"|format(top_weight) }}kg</span>
-                    <span style="color: var(--text-muted);">&times;{{ top_reps }}</span>
-                </div>
-                {% endif %}
-                {% endfor %}
-            </div>
-
+{% set gid = w.garmin_match.garmin_id if w.garmin_match else none %}
+{% if w.status == 'uploaded' %}
+    {% set badges = [('ok', {'uploaded': 'Uploaded', 'updated': 'Watch activity updated'}.get(w.sync_action, 'Synced'))]
+                    + ([('warning', 'Edited on Liftosaur')] if w.edited_since_sync else []) %}
+    {% set resync = {"title": ("Write the sets again into the watch activity" if w.sync_action == 'updated' else "Replace the Garmin activity with a new upload") ~ ", with the latest Liftosaur data and your current mappings",
+                     "attrs": "onclick=\"resyncWorkout('" ~ w.id ~ "', this, " ~ ('false' if w.sync_action == 'updated' else 'true') ~ ")\"",
+                     "cls": "chip-warn" if w.edited_since_sync else ""} %}
+    {% if w.can_restore %}
+        {% set question = "Delete the Garmin activity created for this workout? The workout becomes pending again." if w.sync_action == 'uploaded'
+                          else "Put the watch activity back as it was before the sync (sets, name and description)? The workout becomes pending again." %}
+        {% set restore = {"title": "Delete the Garmin activity this app created" if w.sync_action == 'uploaded' else "Put the watch activity back as it was before the sync",
+                          "attrs": 'hx-post="/api/workouts/' ~ w.id ~ '/restore" hx-disabled-elt="this" hx-confirm="' ~ question ~ '"'} %}
+    {% else %}{% set restore = none %}{% endif %}
+    {% set restore_off = "No copy of the watch activity from before the sync: it is kept for syncs made since version 1.6" %}
+    {% set extra %}<button type="button" class="chip" onclick="unsyncWorkout('{{ w.id }}', this)" title="Forget the sync so this workout can be synced again. Garmin is not changed.">Unsync</button>{% endset %}
+{% else %}
+    {% set badges = [('failed', 'Failed')] if w.failure else [('pending', 'Not on Garmin')] %}
+    {% set resync = {"label": "Sync", "title": "Send this workout to Garmin", "attrs": 'hx-post="/api/sync/' ~ w.id ~ '" hx-disabled-elt="this"'} %}
+    {% set restore = none %}{% set restore_off = "Not synced: Garmin was not changed" %}{% set extra = "" %}
+{% endif %}
+{% set meta %}{{ w.start_time[:10] }} at {{ w.start_time[11:16] }} &middot; {{ w.exercises|length }} exercises{% endset %}
+{% set actions = ui.history_actions(garmin=("https://connect.garmin.com/modern/activity/" ~ gid) if gid else none, resync=resync,
+                                    restore=restore, restore_off=restore_off, fit="/api/workouts/" ~ w.id ~ "/fit", extra=extra) %}
+{% call ui.history_card(w.id|workout_anchor, "liftosaur", w.title, badges, meta, actions) %}
+    {% if w.failure %}<div class="state-failed" style="margin-bottom: 8px;">{{ w.failure.error }}</div>{% endif %}
+    {% for ex in w.exercises %}
+    {% set normal_sets = ex.get('sets', [])|selectattr('type', 'equalto', 'normal')|list %}
+    {% if normal_sets %}
+    {% set weights = normal_sets|map(attribute='weight_kg')|select('number')|list %}
+    {% set reps_list = normal_sets|map(attribute='reps')|select('number')|list %}
+    <span class="hist-pill">{{ ex.get('title') or ex.get('name', '?') }}
+        <span style="color: var(--text-muted);">{{ normal_sets|length }}x</span>
+        <b>{{ "%.1f"|format(weights|max if weights else 0) }}kg</b>
+        <span style="color: var(--text-muted);">&times;{{ reps_list|max if reps_list else 0 }}</span></span>
+    {% endif %}
+    {% endfor %}
             <!-- Calorie breakdown -->
             {% if w.cal_info %}
             <details class="cal-detail">
@@ -268,67 +202,18 @@
                 </div><!-- /cal-detail-content -->
             </details>
             {% endif %}
-        </div>
-        <div style="flex-shrink: 0; margin-left: 16px;">
-            {% if w.status == 'pending' %}
-            <button
-                class="btn btn-secondary btn-sm"
-                hx-post="/api/sync/{{ w.id }}"
-                hx-target="closest .card"
-                hx-swap="outerHTML"
-                hx-indicator="closest .card"
-                aria-label="Upload {{ w.title }} to Garmin"
-            >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-                Upload
-            </button>
-            {% endif %}
-        </div>
-    </div>
-</div>
+{% endcall %}
 {% endfor %}
 
 {% if not workouts %}
 <div class="card" style="text-align: center; padding: 48px 20px;">
-    <p style="color: var(--text-secondary); font-weight: 500;">No workouts found</p>
-    <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">Make sure your Liftosaur API key is set up in <a href="/settings">Settings</a>.</p>
+    <p style="color: var(--text-secondary); font-weight: 500;">{{ "No workout with this status" if status_filter != "all" else "No workouts found" }}</p>
+    {% if status_filter == "all" %}<p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">Make sure your Liftosaur API key is set up in <a href="/settings#liftosaur">Settings</a>.</p>{% else %}<p style="font-size: 13px; margin-top: 4px;"><a href="/liftosaur/workouts">Show all</a></p>{% endif %}
 </div>
 {% endif %}
 
-<!-- Pagination -->
-{% if page_count > 1 %}
-<div style="display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 20px; padding: 16px 0;">
-    {% if page > 1 %}
-    <a href="/liftosaur/workouts?page={{ page - 1 }}" class="btn btn-secondary btn-sm" style="text-decoration: none;">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-        Prev
-    </a>
-    {% else %}
-    <span class="btn btn-secondary btn-sm" style="opacity: 0.3; cursor: default;">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-        Prev
-    </span>
-    {% endif %}
-
-    <span style="font-size: 13px; color: var(--text-secondary); padding: 0 12px; font-variant-numeric: tabular-nums;">
-        Page <strong>{{ page }}</strong> of <strong>{{ page_count }}</strong>
-    </span>
-
-    {% if page < page_count %}
-    <a href="/liftosaur/workouts?page={{ page + 1 }}" class="btn btn-secondary btn-sm" style="text-decoration: none;">
-        Next
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-    </a>
-    {% else %}
-    <span class="btn btn-secondary btn-sm" style="opacity: 0.3; cursor: default;">
-        Next
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-    </span>
-    {% endif %}
-</div>
-{% endif %}
-
-{% with open = not lift.synced %}{% include "partials/liftosaur_flow.html" %}{% endwith %}
+{{ ui.pager("/liftosaur/workouts" ~ ("?status=" ~ status_filter if status_filter != "all" else ""), page, page_count) }}
+{{ ui.how_it_works("liftosaur") }}
 
 <script>
 const hrChartCache = {};

@@ -40,6 +40,7 @@ PAIR_FILTERS = {
     "ignored": ("Ignored or restored", ("ignored", "restored")),
 }
 BUSY = ("running", "queued")
+PAGE_SIZE = 10  # cards per page, like Liftosaur → Workouts
 
 
 def filter_pairs(rows: list[dict], key: str) -> list[dict]:
@@ -263,14 +264,21 @@ class ZwiftModule:
             if status not in PAIR_FILTERS:
                 status = "all"
             rows = filter_pairs(all_rows, status)
-            # Pairs being merged refresh their own row; only the account sync reloads the page.
+            try:
+                page = max(1, int(request.query_params.get("page", 1)))
+            except ValueError:
+                page = 1
+            page_count = max(1, -(-len(rows) // PAGE_SIZE))
+            page = min(page, page_count)
+            rows = rows[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
+            # Pairs being merged refresh their own card; only the account sync reloads the page.
             busy = m.state["zwift"]["running"] if tab == "account" else False
             results = m.state["upload_results"] if tab == "account" else []
             if tab == "account":
                 m.state["upload_results"] = []
             return _render(
                 "zwift.html", request, tab=tab, cfg=m.cfg, rows=rows, busy=busy,
-                total_pairs=len(all_rows), status_filter=status,
+                total_pairs=len(all_rows), status_filter=status, page=page, page_count=page_count,
                 filter_labels={k: label for k, (label, _s) in PAIR_FILTERS.items()},
                 filter_counts={k: len(filter_pairs(all_rows, k)) for k in PAIR_FILTERS},
                 waiting=sum(1 for r in all_rows if r["status"] in ("detected", "simulated")),

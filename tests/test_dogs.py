@@ -48,7 +48,9 @@ class FakeGarmin:
 
     def get_activity(self, activity_id):
         self.gets.append(activity_id)
-        return {"activityId": int(activity_id), "metadataDTO": dict(self.metadata[int(activity_id)])}
+        name = next(a["activityName"] for a in self.activities if a["activityId"] == int(activity_id))
+        return {"activityId": int(activity_id), "activityName": name,
+                "metadataDTO": dict(self.metadata[int(activity_id)])}
 
     def update_activity(self, activity_id, fields):
         self.puts.append((activity_id, fields))
@@ -199,6 +201,47 @@ def hub(tmp_path, monkeypatch):
     server._is_configured_cache = None
     with TestClient(server.app) as c:
         yield c, m
+
+
+def test_restore_removes_only_our_dogs_and_resync_adds_them_back(store):
+    from garmin_sync_hub.activity import dogs_events
+
+    g = FakeGarmin(n_walks=1)
+    g.metadata[100] = {"lapCount": 3, "hasDog": True, "dogProfileIds": [MILO]}  # Milo was there before
+    t = tagger(store, g)
+    t.run(full=True)
+    assert g.metadata[100]["dogProfileIds"] == [MILO, REX]
+
+    assert t.restore(100) == [REX]
+    assert g.metadata[100] == {"lapCount": 3, "hasDog": True, "dogProfileIds": [MILO]}
+    assert 100 in store.state.restored and store.state.recent[0]["restored"]
+    assert t.candidates(g.activities) == []  # automatic runs leave a restored activity alone
+    assert dogs_events(store.state.recent[:1], store.state.dog_name)[0].result == "Rex removed"
+    with pytest.raises(ValueError):
+        t.restore(100)  # nothing added since the restore
+
+    t.resync(100)
+    assert g.metadata[100]["dogProfileIds"] == [MILO, REX] and 100 not in store.state.restored
+
+
+def test_dogs_page_lists_activities_with_the_same_buttons(hub, monkeypatch):
+    c, m = hub
+    m.store.state.recent = [
+        {"id": 7, "name": "Dog Walk", "start": "2026-11-20T08:00", "dogs": [REX], "at": "2026-11-20T09:00:00+00:00", "ok": True},
+        {"id": 8, "name": "Long walk", "start": "2026-11-19T08:00", "dogs": [REX], "at": "2026-11-19T09:00:00+00:00",
+         "ok": False, "error": "Garmin said no"},
+        {"id": 7, "name": "Dog Walk", "start": "2026-11-20T08:00", "dogs": [REX], "at": "2026-11-18T09:00:00+00:00", "ok": True},
+    ]
+    try:
+        page = c.get("/dogs").text
+        assert page.count('class="card hist-card src-dogs"') == 2  # one card per activity
+        assert "/dogs/activities/7/restore" in page and "/dogs/activities/8/restore" not in page
+        assert "/dogs/activities/8/resync" in page and "/dogs/activities/7/fit" in page
+        assert "Garmin said no" in page
+        failed = c.get("/dogs?status=failed").text
+        assert "Long walk" in failed and "/dogs/activities/7/" not in failed
+    finally:
+        m.store.state.recent = []
 
 
 def test_dogs_page_flow(hub, monkeypatch):
