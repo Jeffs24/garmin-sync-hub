@@ -388,15 +388,17 @@ def test_overview_and_activity_show_dogs(hub):
     assert "Dogs → Garmin" in page and "Rex added" in page and 'href="/activity?source=dogs" class="active"' in page
 
 
-def test_sync_now_from_the_overview(hub, monkeypatch):
+def test_check_now_from_the_overview(hub, monkeypatch):
     c, m = hub
     m.store.set_dog(REX, "Rex")
     m.store.add_rule("Dog Walk", REX)
     started = []
     monkeypatch.setattr(m, "start_job", lambda kind: started.append(kind) or True)
-    assert 'hx-post="/dogs/run/auto"' in c.get("/").text
-    r = c.post("/dogs/run/auto", headers={"HX-Request": "true"})
-    assert started == ["auto"] and "Dogs sync started" in r.headers["HX-Trigger"]
+    assert 'hx-post="/dogs/run/check"' in c.get("/").text
+    r = c.post("/dogs/run/check", headers={"HX-Request": "true"})
+    assert started == ["check"] and "Checking your whole history" in r.headers["HX-Trigger"]
+    c.post("/dogs/run/auto", headers={"HX-Request": "true"})  # the old Sync now button: a check
+    assert started == ["check", "check"]
 
 
 def test_scheduled_runs_wait_for_the_retry_of_a_failure(store):

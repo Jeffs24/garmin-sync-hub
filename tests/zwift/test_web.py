@@ -141,7 +141,7 @@ def test_settings_has_one_tab_per_source(client, monkeypatch):
     assert r.status_code == 200
     for tab in ("garmin", "liftosaur", "zwift"):
         assert f'data-tab-button="{tab}"' in r.text and f'data-tab="{tab}"' in r.text
-    assert 'action="/zwift/settings"' in r.text and 'name="scan_days"' in r.text
+    assert 'action="/zwift/settings"' in r.text and 'name="min_overlap"' in r.text
     # Every source's auto-sync switch is in Settings too, and the Zwift file upload
     for prefix in ("set-lift-autosync", "set-zw-autosync", "set-dogs-autosync", "set-bk-autosync"):
         assert f'id="{prefix}-toggle"' in r.text
@@ -355,13 +355,14 @@ def test_zwift_account_is_connected_from_settings(client, monkeypatch):
     assert 'form="zwift-logout"' in c.get("/settings").text
 
 
-def test_sync_now_runs_a_full_pass_in_the_background(client, monkeypatch):
+def test_check_now_scans_the_whole_history_in_the_background(client, monkeypatch):
     c, m = client
     done = threading.Event()
-    monkeypatch.setattr(m, "run_scan", lambda: done.set() or True)
-    r = c.post("/zwift/sync-now", headers={"HX-Request": "true"})
-    assert r.status_code == 200 and "Zwift sync started" in r.headers["HX-Trigger"]
+    monkeypatch.setattr(m, "run_scan", lambda full=False: done.set() or full)
+    r = c.post("/zwift/check", headers={"HX-Request": "true"})
+    assert r.status_code == 200 and "Checking your whole history" in r.headers["HX-Trigger"]
     assert done.wait(2)
+    assert c.post("/zwift/sync-now", headers={"HX-Request": "true"}).status_code == 200  # the old button
     monkeypatch.setattr(m.garmin, "has_tokens", lambda: False)
-    assert c.post("/zwift/sync-now", headers={"HX-Request": "true"}).status_code == 409
-    assert "/zwift/sync-now" in c.get("/").text
+    assert c.post("/zwift/check", headers={"HX-Request": "true"}).status_code == 409
+    assert 'hx-post="/zwift/check"' in c.get("/").text
