@@ -1427,8 +1427,11 @@ async def api_sync_single(request: Request, workout_id: str):
                 aid = upload_result.get("activity_id")
             if aid:
                 rename_activity(garmin_client, aid, workout["title"])
-                set_description(garmin_client, aid, generate_description(workout, calories=result.get("calories"), avg_hr=result.get("avg_hr")))
-            db.mark_synced(workout_id=workout_id, garmin_activity_id=str(aid) if aid else None, title=workout["title"], calories=result.get("calories"), avg_hr=result.get("avg_hr"), source_updated_at=workout.get("updated_at"), action="updated" if existing_id else "uploaded")
+                # A watch activity keeps the calories and heart rate the watch measured: no estimate.
+                estimate = {} if existing_id else {"calories": result.get("calories"), "avg_hr": result.get("avg_hr")}
+                set_description(garmin_client, aid, generate_description(workout, **estimate))
+            kept = {} if existing_id else result
+            db.mark_synced(workout_id=workout_id, garmin_activity_id=str(aid) if aid else None, title=workout["title"], calories=kept.get("calories"), avg_hr=kept.get("avg_hr"), source_updated_at=workout.get("updated_at"), action="updated" if existing_id else "uploaded")
         _refresh_cached_workout(workout)
 
         # Reload the page so the card shows its new status, with a notice.
@@ -1733,12 +1736,10 @@ async def _do_sync_one(request: Request):
             logger.info("Activity already on Garmin (%s), updating sets for %s", existing_id, unsynced["title"])
             aid = existing_id
             update_existing_activity_sets(garmin_client, aid, unsynced)
-            # Still generate FIT to get calorie estimate
-            with tempfile.TemporaryDirectory() as tmp:
-                fit_path = f"{tmp}/{unsynced['id']}.fit"
-                result = generate_fit(unsynced, hr_samples=None, output_path=fit_path)
+            # The watch measured calories and heart rate: no estimate on this activity.
+            result = {}
             rename_activity(garmin_client, aid, unsynced["title"])
-            desc = generate_description(unsynced, calories=result.get("calories"), avg_hr=result.get("avg_hr"))
+            desc = generate_description(unsynced)
             set_description(garmin_client, aid, desc)
         else:
             with tempfile.TemporaryDirectory() as tmp:

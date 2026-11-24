@@ -134,7 +134,8 @@
     {% endif %}
     {% endfor %}
             <!-- Calorie breakdown -->
-            {% if w.cal_info %}
+            {# A watch activity keeps the calories the watch measured: the estimate is only for uploads. #}
+            {% if w.cal_info and w.sync_action != 'updated' %}
             <details class="cal-detail">
                 <summary>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10M18 20V4M6 20v-4"/></svg>

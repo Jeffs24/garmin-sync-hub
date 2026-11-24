@@ -341,6 +341,25 @@ def test_workout_cards_have_the_four_buttons_and_filters(client, monkeypatch):
         _db.set_app_config(server.ALL_WORKOUTS_KEY, {})
 
 
+def test_calorie_estimate_only_for_workouts_not_written_into_a_watch_activity(client, monkeypatch):
+    monkeypatch.setattr(server, "load_config", lambda: {"liftosaur_api_key": "", "user_profile": {}, "timing": {}})
+    times = {"start_time": "2026-11-20T10:00:00Z", "end_time": "2026-11-20T10:40:00Z"}
+    _db = db.get_db()
+    _db.set_app_config("workouts_page_1", {"workouts": [
+        {"id": "cal-1", "title": "Watch", "exercises": [], **times},
+        {"id": "cal-2", "title": "Upload", "exercises": [], **times}], "page_count": 1})
+    db.mark_synced("cal-1", "81", "Watch", action="updated")
+    db.mark_synced("cal-2", "82", "Upload", action="uploaded")
+    try:
+        page = client.get("/liftosaur/workouts").text
+        watch, upload = page.split('id="workout-cal-1"')[1].split('id="workout-cal-2"')
+        assert "Calories:" not in watch  # the watch measured them
+        assert "Calories:" in upload
+    finally:
+        db.unsync("cal-1"), db.unsync("cal-2")
+        _db.set_app_config("workouts_page_1", {})
+
+
 def test_workout_fit_download(client, monkeypatch):
     workout = {"id": "fit-1", "title": "Push", "start_time": "2026-11-20T10:00:00+00:00",
                "end_time": "2026-11-20T10:30:00+00:00",
