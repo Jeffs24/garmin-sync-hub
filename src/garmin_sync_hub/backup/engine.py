@@ -264,15 +264,24 @@ class PacedGarmin:
 
     def list_activities(self, max_pages: int | None = None) -> list[dict]:
         """Activity summaries, newest first (all of them, or the first pages)."""
-        activities, start, pages = [], 0, 0
+        # Garmin may return fewer than PAGE activities per page: only an empty page means the
+        # end of the history (stopping at a short page used to miss every older activity).
+        activities: list[dict] = []
+        seen: set = set()
+        start, pages = 0, 0
         while True:
             page = self.call(self.g.get_activities, start, PAGE) or []
             pages += 1
-            activities.extend(a for a in page if isinstance(a, dict) and a.get("activityId"))
+            new = [a for a in page if isinstance(a, dict) and a.get("activityId")
+                   and a["activityId"] not in seen]
+            if not new:
+                return activities  # end of the history (or Garmin repeating itself)
+            seen.update(a["activityId"] for a in new)
+            activities.extend(new)
             self.p.message = f"{len(activities)} activities listed"
-            if len(page) < PAGE or (max_pages and pages >= max_pages):
+            if max_pages and pages >= max_pages:
                 return activities
-            start += PAGE
+            start += len(page)
 
 
 class Backup(PacedGarmin):

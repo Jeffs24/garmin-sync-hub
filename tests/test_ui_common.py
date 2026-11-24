@@ -204,3 +204,16 @@ def test_startup_lists_obsolete_env_variables(monkeypatch):
     messages = obsolete_env_messages()
     assert any(m.startswith("GARMIN_PASSWORD in .env is ignored: connect Garmin") for m in messages)
     assert any(m.startswith("ZWIFT_AUTO_MERGE in .env is ignored: now in Settings") for m in messages)
+
+
+def test_garmin_exercise_names_are_shown_not_just_numbers(client, monkeypatch):
+    from garmin_sync_hub.liftosaur.mapper import fit_exercise_name, fit_exercise_names
+
+    assert fit_exercise_name(24, 0) == "Alternating Dumbbell Shoulder Press"  # 0 is not "generic"
+    assert fit_exercise_name(24, 4) == "Barbell Shoulder Press"
+    assert fit_exercise_name(24, 9999) is None and fit_exercise_names(9999) == []
+    names = client.get("/api/garmin-exercise-names/24").json()
+    assert {"sub": 4, "name": "Barbell Shoulder Press"} in names
+    monkeypatch.setattr(server, "_get_unmapped_exercises", lambda fetch=True: [])
+    page = client.get("/liftosaur/mappings").text
+    assert "Shoulder Press › " in page and "There is no generic exercise" in page

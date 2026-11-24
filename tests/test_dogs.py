@@ -204,7 +204,12 @@ def hub(tmp_path, monkeypatch):
 def test_dogs_page_flow(hub, monkeypatch):
     c, m = hub
     page = c.get("/dogs").text
-    assert "Find my dogs" in page and "reads the dogs of your Garmin profile" in page
+    assert "Find my dogs" in page and "No dog yet" in page and "Settings → Dogs" in page
+    settings = c.get("/settings").text
+    assert "reads the dogs of your Garmin profile" in settings and 'data-tab-button="dogs"' in settings
+    r = c.post("/dogs/dog", data={"dog_id": "77", "name": "Temp", "next": "settings"}, follow_redirects=False)
+    assert r.headers["location"] == "/settings?saved=dogs#dogs"
+    assert c.post("/dogs/dog/77/delete?next=settings", follow_redirects=False).headers["location"] == "/settings?saved=dogs#dogs"
     assert 'href="/dogs" class="active"' in page
 
     r = c.post("/dogs/dog", data={"dog_id": str(REX), "name": "Rex"}, follow_redirects=False)
@@ -234,3 +239,103 @@ def test_jobs_need_garmin_and_rules(hub, monkeypatch):
     monkeypatch.setattr(m.garmin, "has_tokens", lambda: False)
     r = c.post("/dogs/run/discover")
     assert r.status_code == 409 and "Connect Garmin" in r.text
+
+
+def test_short_pages_do_not_end_the_history(store):
+    """Garmin may answer with fewer activities than asked: keep going until an empty page."""
+    g = FakeGarmin(n_walks=60)  # 120 activities, served 20 at a time
+    full = g.get_activities
+
+    def short_pages(start, limit):
+        return full(start, min(limit, 20))
+    g.get_activities = short_pages
+    t = tagger(store, g)
+    t.run(full=True)
+    assert len(g.puts) == 60  # every walk, the oldest included
+    assert g.list_calls[-1] == 120  # stopped on the empty page
+
+
+def test_preview_reports_what_it_checked(store):
+    g = FakeGarmin(n_walks=2)
+    g.activities.append({"activityId": 999, "activityName": "Dog walk with Milo", "startTimeLocal": "2025-01-02 08:00:00"})
+    g.metadata[999] = {}
+    t = tagger(store, g)
+    t.preview()
+    assert t.scan["checked"] == 5 and t.scan["oldest"] == "2025-01-02" and t.scan["matching_total"] == 2
+    assert t.scan["near_misses"] == [("Dog walk with Milo", 1)]
+
+
+def test_failures_are_logged_and_cleared_once_the_dog_is_added(store):
+    g = FakeGarmin(n_walks=1)
+    real_put = g.update_activity
+
+    def refuse(activity_id, fields):
+        raise RuntimeError("API Error 500")
+    g.update_activity = refuse
+    tagger(store, g).run(full=True)
+    assert [(e["id"], e["ok"], e["error"]) for e in store.state.recent] == [(100, False, "API Error 500")]
+    assert "100" not in store.state.tagged  # tried again next time
+
+    g.update_activity = real_put
+    tagger(store, g).run(full=True)
+    assert [(e["id"], e["ok"]) for e in store.state.recent] == [(100, True)]  # the failure is gone
+
+
+def test_dog_events_in_the_activity_feed(store):
+    from garmin_sync_hub import activity
+
+    log = [{"id": 5, "name": "Dog Walk", "start": "2026-11-20 08:00", "dogs": [REX], "at": "2026-11-21T09:00:00+00:00", "ok": True},
+           {"id": 6, "name": "Dog Walk", "start": "2026-11-19 08:00", "dogs": [REX], "at": "2026-11-21T09:01:00+00:00",
+            "ok": False, "error": "API Error 500"}]
+    events = activity.dogs_events(log, store.state.dog_name)
+    ok, failed = events
+    assert (ok.source, ok.result, ok.state, ok.garmin_url.endswith("/5"), ok.link) == ("dogs", "Rex added", "ok", True, "/dogs")
+    assert (failed.result, failed.state, failed.detail) == ("Failed", "failed", "Rex: API Error 500")
+    feed = activity.build_feed([], [], [], events)
+    assert activity.counts(feed)["dogs"] == 2 and activity.counts(feed)["attention"] == 1
+
+
+def test_overview_and_activity_show_dogs(hub):
+    c, m = hub
+    m.store.set_dog(REX, "Rex")
+    m.store.add_rule("Dog Walk", REX)
+    m.store.state.recent = [{"id": 5, "name": "Dog Walk", "start": "2026-11-20 08:00", "dogs": [REX],
+                             "at": "2026-11-21T09:00:00+00:00", "ok": True}]
+    m.store.state.tagged = {"5": [REX]}
+    overview = c.get("/").text
+    assert "src-dogs" in overview and "1 activity with a dog" in overview and "Rex" in overview
+    page = c.get("/activity?source=dogs").text
+    assert "Dogs → Garmin" in page and "Rex added" in page and 'href="/activity?source=dogs" class="active"' in page
+
+
+def test_sync_now_from_the_overview(hub, monkeypatch):
+    c, m = hub
+    m.store.set_dog(REX, "Rex")
+    m.store.add_rule("Dog Walk", REX)
+    started = []
+    monkeypatch.setattr(m, "start_job", lambda kind: started.append(kind) or True)
+    assert 'hx-post="/dogs/run/auto"' in c.get("/").text
+    r = c.post("/dogs/run/auto", headers={"HX-Request": "true"})
+    assert started == ["auto"] and "Dogs sync started" in r.headers["HX-Trigger"]
+
+
+def test_scheduled_runs_wait_for_the_retry_of_a_failure(store):
+    g = FakeGarmin(n_walks=1)
+    real_put = g.update_activity
+    g.update_activity = lambda activity_id, fields: (_ for _ in ()).throw(RuntimeError("API Error 500"))
+    tagger(store, g).run(full=True)
+    failure = store.state.recent[0]
+    assert failure["attempts"] == 1 and failure["retry_at"]
+    g.update_activity = real_put
+    tagger(store, g).run(scheduled=True)  # retry not due yet: left alone
+    assert g.puts == []
+    tagger(store, g).run()  # a click (Sync now) tries it at once
+    assert [a for a, _ in g.puts] == ["100"] and store.state.recent[0]["ok"]
+
+
+def test_overview_refreshes_while_a_sync_runs(hub, monkeypatch):
+    c, m = hub
+    page = c.get("/").text
+    assert 'id="source-grid"' in page and 'hx-trigger="refresh"' in page
+    monkeypatch.setattr(type(m), "running", property(lambda self: True))
+    assert 'hx-trigger="refresh, every 3s"' in c.get("/").text

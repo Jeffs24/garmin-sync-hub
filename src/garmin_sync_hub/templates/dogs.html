@@ -2,14 +2,7 @@
 {% import "partials/ui.html" as ui %}
 {% block title %}Dogs · garmin-sync-hub{% endblock %}
 
-{% block head %}
-<style>
-    .dog-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 0; border-bottom: 1px solid var(--border-subtle); }
-    .dog-row:last-child { border-bottom: none; }
-    .dog-row .form-input, .dog-row .form-select { min-height: 36px; padding: 6px 10px; font-size: 14px; width: auto; }
-    .dog-id { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 90px; }
-</style>
-{% endblock %}
+
 
 {% block content %}
 <div class="page-header">
@@ -23,64 +16,15 @@
 
 {% include "partials/dogs_status.html" %}
 
-<div class="card" style="margin-bottom: 16px;">
-    <div class="card-title" style="margin-bottom: 6px;">Your dogs</div>
-    {% if not s.dogs %}
-    <p class="form-hint" style="line-height: 1.7;">
-        Click <b>Find my dogs</b>: it reads the dogs of your Garmin profile (add them in the Garmin Connect app,
-        under your profile's dogs) with their names. If Garmin does not answer, it looks for dogs on your latest
-        activities and your backup instead. You can also enter an id yourself.
-    </p>
-    {% endif %}
-    {% for dog_id, name in s.dogs.items() %}
-    <div class="dog-row">
-        <span class="dog-id">#{{ dog_id }}</span>
-        <form method="post" action="/dogs/dog" style="display: flex; gap: 8px; align-items: center;">
-            <input type="hidden" name="dog_id" value="{{ dog_id }}">
-            <input class="form-input" name="name" value="{{ name }}" aria-label="Name of dog {{ dog_id }}" maxlength="60" required>
-            <button class="btn btn-secondary btn-sm">Rename</button>
-        </form>
-        <form method="post" action="/dogs/dog/{{ dog_id }}/delete" onsubmit="return confirm('Forget {{ name }} and its rules? Activities on Garmin are not changed.')">
-            <button class="btn btn-secondary btn-sm">Forget</button>
-        </form>
-    </div>
-    {% endfor %}
-    <details style="margin-top: 10px;">
-        <summary class="form-hint" style="cursor: pointer;">Enter a dog id yourself</summary>
-        <form method="post" action="/dogs/dog" class="dog-row">
-            <input class="form-input" name="dog_id" inputmode="numeric" pattern="[0-9]+" placeholder="Dog id" required style="max-width: 140px;">
-            <input class="form-input" name="name" placeholder="Name" maxlength="60" required>
-            <button class="btn btn-secondary btn-sm">Add</button>
-        </form>
-    </details>
-</div>
-
 <div class="card">
-    <div class="card-title" style="margin-bottom: 6px;">Rules</div>
-    <p class="form-hint" style="margin-bottom: 8px;">An activity whose name matches gets the dog. Case is ignored; dogs already on an activity are kept.</p>
-    {% for rule in s.rules %}
-    <div class="dog-row">
-        <span style="font-size: 14px;">Activity name {{ match_modes[rule.match] }} <b>“{{ rule.name }}”</b> → {{ s.dog_name(rule.dog_id) }}</span>
-        <form method="post" action="/dogs/rules/{{ loop.index0 }}/delete" style="margin-left: auto;">
-            <button class="btn btn-secondary btn-sm">Delete</button>
-        </form>
-    </div>
-    {% endfor %}
+    <div class="card-title" style="margin-bottom: 6px;">Dogs and rules</div>
     {% if s.dogs %}
-    <form method="post" action="/dogs/rules" class="dog-row">
-        <span style="font-size: 14px;">Activity name</span>
-        <select class="form-select" name="match" aria-label="How the name matches">
-            {% for key, label in match_modes.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
-        </select>
-        <input class="form-input" name="name" placeholder="Dog Walk" required aria-label="Activity name">
-        <span style="font-size: 14px;">→</span>
-        <select class="form-select" name="dog_id" aria-label="Dog">
-            {% for dog_id, name in s.dogs.items() %}<option value="{{ dog_id }}">{{ name }}</option>{% endfor %}
-        </select>
-        <button class="btn btn-primary btn-sm">Add rule</button>
-    </form>
+    <ul style="margin: 0 0 0 18px; font-size: 14px; line-height: 1.8;">
+        {% for rule in s.rules %}<li>Activity name {{ match_modes[rule.match] }} “{{ rule.name }}” → {{ s.dog_name(rule.dog_id) }}</li>{% else %}<li class="form-hint">No rule yet.</li>{% endfor %}
+    </ul>
     {% else %}
-    <p class="form-hint">Find or add a dog first.</p>
+    <p class="form-hint">No dog yet: click <b>Find my dogs</b> above.</p>
     {% endif %}
+    <p class="form-hint" style="margin-top: 8px;">Name your dogs and change the rules in <a href="/settings#dogs">Settings → Dogs</a>.</p>
 </div>
 {% endblock %}

@@ -91,9 +91,11 @@ def svg_chart(name: str, points: list[tuple[float, float]], invert: bool = False
 
 def autosync_status(m: "ZwiftModule") -> str:
     """One line under the auto-sync switch: last and next scan (same macro as Liftosaur)."""
+    if m.state.get("syncing"):
+        return "Syncing now…"
     return templating.render_autosync_line(
         _env, m.cfg.auto_scan, m.state["last_scan"], m.state["next_scan"],
-        "scans run only when you click “Scan now”.")
+        "scans run only when you click “Sync now”.")
 
 
 class ZwiftModule:
@@ -106,10 +108,12 @@ class ZwiftModule:
         self.service = Service(self.cfg, self.garmin, self.store)
         self.zwift = ZwiftClient(self.cfg.zwift_token_file)
         self._sync_lock = threading.Lock()
+        self._scan_lock = threading.Lock()
         self._stop = threading.Event()
         self._wake = threading.Event()
         self.state = {
             "last_error": None,
+            "syncing": False,
             "last_scan": None,
             "next_scan": None,
             "upload_results": [],
@@ -145,12 +149,16 @@ class ZwiftModule:
                 self.run_scan()
             self._wait_for_next_scan()
 
-    def run_scan(self) -> None:
-        """One automatic pass: find pairs, fetch new Zwift rides, merge if auto-merge is on."""
+    def run_scan(self) -> bool:
+        """One pass (scheduled or "Sync now"): find pairs, fetch new Zwift rides, merge if
+        auto-merge is on. False when a pass is already running."""
+        if not self._scan_lock.acquire(blocking=False):
+            return False
         self.state["last_scan"] = datetime.now(timezone.utc)
-        if not self.garmin.has_tokens():
-            return
+        self.state["syncing"] = True
         try:
+            if not self.garmin.has_tokens():
+                return True
             self.service.scan()
             if self.zwift.connected() and self.cfg.zwift_auto_sync:
                 self.zwift_sync(datetime.now(timezone.utc) - timedelta(days=self.cfg.scan_days))
@@ -159,6 +167,17 @@ class ZwiftModule:
         except Exception as e:  # noqa: BLE001
             log.exception("Zwift scan failed")
             self.state["last_error"] = str(e)
+        finally:
+            self.state["syncing"] = False
+            self._scan_lock.release()
+        return True
+
+    def sync_now(self) -> bool:
+        """Start a pass in the background (the "Sync now" button). False when one is running."""
+        if self._scan_lock.locked():
+            return False
+        threading.Thread(target=self.run_scan, name="zwift-sync-now", daemon=True).start()
+        return True
 
     def _due(self) -> datetime | None:
         """When the next automatic scan runs, or None when auto-sync is off."""
@@ -219,6 +238,7 @@ class ZwiftModule:
             "last_scan": self.state["last_scan"],
             "next_scan": self.state["next_scan"],
             "last_error": self.state["last_error"],
+            "syncing": self.state["syncing"],
         }
 
     # --- routes -------------------------------------------------------------
@@ -254,6 +274,7 @@ class ZwiftModule:
                 filter_labels={k: label for k, (label, _s) in PAIR_FILTERS.items()},
                 filter_counts={k: len(filter_pairs(all_rows, k)) for k in PAIR_FILTERS},
                 waiting=sum(1 for r in all_rows if r["status"] in ("detected", "simulated")),
+                merged=sum(1 for r in all_rows if r["status"] == "merged"), last_scan=m.state["last_scan"],
                 garmin_connected=m.garmin.has_tokens(), zwift_connected=m.zwift.connected(),
                 zs=m.state["zwift"], last_error=m.state["last_error"], upload_results=results,
                 scan_intervals=SCAN_INTERVALS, autosync_status=autosync_status(m), **pair_ctx(),
@@ -272,6 +293,17 @@ class ZwiftModule:
         @router.get("/account", response_class=HTMLResponse)
         def account_page(request: Request) -> HTMLResponse:
             return render_tab(request, "account")
+
+        @router.post("/sync-now")
+        def sync_now(request: Request):
+            if not m.garmin.has_tokens():
+                raise HTTPException(409, "Connect Garmin first (Settings → Garmin).")
+            started = m.sync_now()
+            message = ("Zwift sync started: new pairs show up on the Zwift page." if started
+                       else "A Zwift sync is already running.")
+            if request.headers.get("HX-Request"):
+                return HTMLResponse("", headers=templating.notice_headers(message, "success" if started else "info"))
+            return RedirectResponse("/zwift", status_code=303)
 
         @router.post("/scan")
         def scan() -> RedirectResponse:

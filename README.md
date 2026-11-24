@@ -9,8 +9,8 @@ Garmin Connect automations in one self-hosted app, with one Garmin login:
 
 It runs as one Docker container with a web UI:
 
-- **Overview**: one card per source (Garmin, Liftosaur, Zwift) with its state, what is pending and a quick action, plus the latest activity. The Garmin card checks the connection every 30 minutes (or on **Check now**) and warns a week before the Garmin sign-in expires.
-- **Activity**: everything sent to Garmin, from every source, with tabs to filter by source or show only what needs your attention (failures, pairs waiting to be merged).
+- **Overview**: one card per source (Garmin, Liftosaur, Zwift, Dogs, Backup) with its state, what is pending and a **Sync now** button, plus the latest activity. The Garmin card checks the connection every 30 minutes (or on **Check now**) and warns a week before the Garmin sign-in expires.
+- **Activity**: everything sent to Garmin, from every source (dogs added and backup runs included), with tabs to filter by source or show only what needs your attention (failures, pairs waiting to be merged).
 - **Liftosaur** and **Zwift**: one section per source, with its own pages.
 - **Dogs**: your dogs and the rules that add them to activities.
 - **Backup**: the Garmin account backup.
@@ -45,7 +45,7 @@ A synced workout has three actions:
 - **Re-sync** (after an edit in Liftosaur): uploads the workout again. An uploaded activity is replaced; an updated watch activity gets its sets written again.
 - **Unsync**: forgets the sync without touching Garmin.
 
-- **Mappings**: Liftosaur exercises are mapped to Garmin's exercise categories. Unmapped exercises show as "Unknown" on Garmin; map them from **Liftosaur → Mappings**.
+- **Mappings**: Liftosaur exercises are mapped to Garmin's exercise categories. Unmapped exercises show as "Unknown" on Garmin; map them from **Liftosaur → Mappings**, where each mapping shows the exact Garmin exercise (there is no generic one: sub-id 0 is the first exercise of the category).
 - **Heart rate**: Liftosaur records none, so an uploaded workout has no heart rate and its calories are estimated at 90 bpm from your profile. With **Update existing activities**, the strength activity your watch recorded keeps its heart rate and gets your sets. **Heart Rate Data** in Settings draws the watch's all-day heart rate on each workout in Workouts; it is not added to the file sent to Garmin.
 - **Update existing activities**: if your watch already recorded the strength session, the workout's exercises and sets are written into that activity instead of creating a new one.
 
@@ -78,10 +78,10 @@ Offline merge of two files: `garmin-sync-hub zwift-merge-files watch.fit zwift.f
 
 Garmin Connect lets you add your dogs to an activity. **Dogs** does it for you, by activity name:
 
-1. Click **Find my dogs**: it reads the dogs of your Garmin profile, with their names (add your dog in the Garmin Connect app first). If Garmin does not answer, it looks for their ids on your latest activities and in your backup instead; give those dogs a name.
-2. Add a rule: activity name *is* (or *contains*, *starts with*) "Dog Walk" → your dog. Case is ignored.
+1. On the **Dogs** page, click **Find my dogs**: it reads the dogs of your Garmin profile, with their names (add your dog in the Garmin Connect app first). If Garmin does not answer, it looks for their ids on your latest activities and in your backup instead; name those dogs in **Settings → Dogs**.
+2. In **Settings → Dogs**, add a rule: activity name *is* (or *contains*, *starts with*) "Dog Walk" → your dog. Case is ignored.
 3. **Preview past activities** lists every matching activity; **Add to N activities** updates them on Garmin Connect. Dogs already on an activity are kept, and nothing else in the activity changes.
-4. Turn on **Add to new activities** to check the latest 100 activities on a schedule.
+4. **Sync now** (here or on the Overview) checks your latest 100 activities; turn on **Auto-sync** to do it on a schedule. Each dog added, or failure, shows in **Activity**. The preview says how many activities it checked and how far back, and lists similar names that match no rule ("Dog walk with Milo").
 
 This uses the same unofficial Garmin Connect API as the rest of the app: the profile's dogs (`gcx.garmin.com/family-api/profile-service/profile/pets`) and the activity's `hasDog` and `dogProfileIds`. Garmin's activity details only say `hasDog`, without the ids, which is why the dogs are read from the profile.
 
@@ -146,7 +146,7 @@ The Garmin backup itself is in its own volume, `garmin-backup/` (`BACKUP_DIR`).
 
 ## Good to know
 
-- **Automatic retries**: with auto-sync on (Liftosaur) or auto-merge and auto-sync on (Zwift), a failed workout or merge is tried again after 30 minutes, then 2 hours, then 8 hours. After that it waits for a click. The Activity page shows when the next try is due.
+- **Automatic retries**: with auto-sync on, a failed workout (Liftosaur), merge (Zwift, with auto-merge), dog (Dogs) or backup is tried again after 30 minutes, then 2 hours, then 8 hours. After that it waits for a click; **Sync now** always tries at once. The Activity page shows when the next try is due.
 - **Health check**: `GET /healthz` answers without sign-in (`{"status": "ok", "version": ..., "garmin": ...}`) and is used by the Docker `HEALTHCHECK`. A Garmin problem is reported there but does not mark the container unhealthy.
 
 - The tool uses the unofficial Garmin Connect API (through [python-garminconnect](https://github.com/cyberjunky/python-garminconnect)) and the unofficial Zwift Companion API. Both can change without notice.

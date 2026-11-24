@@ -79,7 +79,9 @@
         <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.7;">
             <strong>Exercise name:</strong> Must match exactly as shown on your <a href="/liftosaur/workouts">Workouts</a> page.<br>
             <strong>Category:</strong> Pick the closest Garmin exercise type. When you select one, available sub-exercises are shown below.<br>
-            <strong>Sub ID:</strong> Use <strong>0</strong> for generic, or pick from the list that appears when you select a category.
+            <strong>Sub ID:</strong> the exact Garmin exercise, picked from the list that appears when you select a category.
+            There is no generic exercise: <strong>0</strong> is simply the first name of the list (for Shoulder Press, “Alternating Dumbbell Shoulder Press”).
+            The name Garmin will show appears under the field.
             <br><span style="font-size: 11px;">Reference: <a href="https://developer.garmin.com/fit/overview/" target="_blank" rel="noopener">Garmin FIT SDK</a></span>
         </p>
         <form id="mapping-form" style="display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap;"
@@ -124,7 +126,7 @@
         <thead>
             <tr>
                 <th>Liftosaur Exercise Name</th>
-                <th>Garmin Category</th>
+                <th>Garmin exercise</th>
                 <th style="text-align: center;">Cat ID</th>
                 <th style="text-align: center;">Sub ID</th>
             </tr>
@@ -190,18 +192,40 @@
 </div>
 {% endif %}
 
+<style>
+.sub-chip { cursor: pointer; padding: 2px 8px; border-radius: 4px; font-size: 11px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-subtle); color: var(--text-secondary); transition: background 0.1s; }
+.sub-chip:hover { background: rgba(255,255,255,0.1); }
+</style>
 <script>
-// Build index of sub-IDs per category from the mapping table
-const subIdIndex = {};
-document.querySelectorAll('#mappings-table tr.mapping-row').forEach(row => {
-    const cells = row.querySelectorAll('td');
-    if (cells.length >= 4) {
-        const name = cells[0].textContent.trim();
-        const cat = cells[2].textContent.trim();
-        const sub = cells[3].textContent.trim();
-        if (!subIdIndex[cat]) subIdIndex[cat] = [];
-        subIdIndex[cat].push({ name, sub });
+// Garmin's exercise names per category, fetched once per category. Sub 0 is the first name
+// of the list, not a generic exercise.
+const exerciseNames = {};
+async function namesFor(catId) {
+    if (!(catId in exerciseNames)) {
+        exerciseNames[catId] = await fetch('/api/garmin-exercise-names/' + encodeURIComponent(catId))
+            .then(r => r.ok ? r.json() : []).catch(() => []);
     }
+    return exerciseNames[catId];
+}
+
+// Show the exact Garmin exercise next to a Sub ID input, and keep it current while typing.
+async function showExerciseName(catId, input) {
+    let label = input.parentElement.querySelector('.exercise-name');
+    if (!label) {
+        label = document.createElement('div');
+        label.className = 'exercise-name form-hint';
+        input.insertAdjacentElement('afterend', label);
+    }
+    const names = await namesFor(catId);
+    const found = names.find(n => String(n.sub) === String(input.value));
+    label.textContent = found ? '→ ' + found.name : (names.length ? 'Not a Garmin exercise of this category' : '');
+    label.className = 'exercise-name form-hint' + (found || !names.length ? '' : ' state-failed');
+}
+document.addEventListener('input', e => {
+    const input = e.target;
+    if (input.name !== 'subcategory') return;
+    const cat = input.form && input.form.querySelector('[name="category"]');
+    if (cat) showExerciseName(cat.value, input);
 });
 
 // Load categories from API and populate all category selects (also in content loaded later).
@@ -222,34 +246,34 @@ fetch('/api/garmin-categories').then(r => r.json()).then(data => { catData = dat
 document.body.addEventListener('htmx:afterSettle', () => fillCategorySelects(document));
 
 function _renderSubChips(entries, targetInput) {
-    const seen = new Set();
-    return entries.filter(e => { if (seen.has(e.sub)) return false; seen.add(e.sub); return true; })
-        .sort((a, b) => parseInt(a.sub) - parseInt(b.sub))
-        .map(e =>
-            '<span onclick="document.getElementById(\'' + targetInput + '\').value=' + e.sub + '" ' +
-            'style="cursor:pointer; padding:2px 8px; border-radius:4px; font-size:11px; ' +
-            'background:rgba(255,255,255,0.05); border:1px solid var(--border-subtle); ' +
-            'color:var(--text-secondary); transition:background 0.1s;" ' +
-            'onmouseover="this.style.background=\'rgba(255,255,255,0.1)\'" ' +
-            'onmouseout="this.style.background=\'rgba(255,255,255,0.05)\'">' +
-            '<strong>' + e.sub + '</strong> ' + e.name + '</span>'
-        ).join('');
+    return entries.map(e =>
+        '<span class="sub-chip" onclick="pickSub(\'' + targetInput + '\', ' + e.sub + ')">' +
+        '<strong>' + e.sub + '</strong> ' + e.name.replace(/</g, '&lt;') + '</span>'
+    ).join('');
 }
 
-function showSubIds(catId) {
+function pickSub(inputId, sub) {
+    const input = document.getElementById(inputId);
+    input.value = sub;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+async function showSubIds(catId) {
     const helper = document.getElementById('sub-id-helper');
     const list = document.getElementById('sub-id-list');
-    const entries = subIdIndex[catId] || [];
+    const entries = await namesFor(catId);
+    showExerciseName(catId, document.getElementById('map-subid'));
     if (entries.length === 0) { helper.style.display = 'none'; return; }
     list.innerHTML = _renderSubChips(entries, 'map-subid');
     helper.style.display = 'block';
 }
 
-function showUnmappedSubs(select, idx) {
+async function showUnmappedSubs(select, idx) {
     const catId = select.value;
     const helper = document.getElementById('unmapped-sub-helper-' + idx);
     const chips = helper.querySelector('.sub-id-chips');
-    const entries = subIdIndex[catId] || [];
+    const entries = await namesFor(catId);
+    showExerciseName(catId, document.getElementById('unmapped-sub-' + idx));
     if (entries.length === 0) { helper.style.display = 'none'; return; }
     chips.innerHTML = _renderSubChips(entries, 'unmapped-sub-' + idx);
     helper.style.display = 'block';

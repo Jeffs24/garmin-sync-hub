@@ -31,7 +31,7 @@ def test_feed_merges_sources_newest_first_and_filters():
     all_titles = [e.title for e in activity.filter_events(events, "all")]
     assert "Skip" not in all_titles  # ignored pairs are hidden from "All"
     assert [e.title for e in activity.filter_events(events, "attention")] == ["Legs", "Ride"]
-    assert activity.counts(events) == {"all": 5, "liftosaur": 3, "zwift": 3, "attention": 2}
+    assert activity.counts(events) == {"all": 5, "liftosaur": 3, "zwift": 3, "dogs": 0, "backup": 0, "attention": 2}
 
 
 def test_sync_records_action_and_failures(tmp_path):

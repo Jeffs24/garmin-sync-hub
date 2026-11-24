@@ -702,6 +702,40 @@ def update_custom_mapping_cache(exercise_name: str, category: int, subcategory: 
     _custom_mappings[exercise_name] = (category, subcategory)
 
 
+def _exercise_name_enum(category: int):
+    """FIT enum of the exercise names of a category (e.g. ShoulderPressExerciseName), or None."""
+    from fit_tool.profile import profile_type
+
+    try:
+        cat = profile_type.ExerciseCategory(category)
+    except ValueError:
+        return None
+    return getattr(profile_type, "".join(p.capitalize() for p in cat.name.split("_")) + "ExerciseName", None)
+
+
+def _label(enum_name: str) -> str:
+    return enum_name.replace("_", " ").title()
+
+
+def fit_exercise_names(category: int) -> list[tuple[int, str]]:
+    """Named exercises Garmin knows in a category, as (subcategory, name).
+
+    There is no "generic" entry: subcategory 0 is simply the first name of the list
+    (for Shoulder Press: Alternating Dumbbell Shoulder Press).
+    """
+    enum = _exercise_name_enum(category)
+    return [(m.value, _label(m.name)) for m in enum] if enum else []
+
+
+def fit_exercise_name(category: int, subcategory: int) -> str | None:
+    """Name Garmin shows for (category, subcategory), e.g. (24, 0) -> "Alternating Dumbbell Shoulder Press"."""
+    enum = _exercise_name_enum(category)
+    try:
+        return _label(enum(subcategory).name) if enum else None
+    except ValueError:
+        return None
+
+
 def lookup_exercise(exercise_name: str) -> tuple[int, int, str]:
     """Return ``(category, subcategory, display_name)`` for an exercise.
 

@@ -49,6 +49,7 @@
     <button type="button" role="tab" data-tab-button="garmin">Garmin</button>
     <button type="button" role="tab" data-tab-button="liftosaur">Liftosaur</button>
     <button type="button" role="tab" data-tab-button="zwift">Zwift</button>
+    <button type="button" role="tab" data-tab-button="dogs">Dogs</button>
     <button type="button" role="tab" data-tab-button="backup">Backup</button>
 </nav>
 
@@ -398,6 +399,9 @@
 <form id="zwift-logout" method="post" action="/zwift/logout"></form>
 <form id="backup-settings" method="post" action="/backup/settings"></form>
 
+{# Dogs: their own forms, so outside the main form #}
+{% include "partials/dogs_settings.html" %}
+
 {% if unmapped %}
 <div class="card" style="margin-top: 28px;" data-tab="liftosaur">
     <div class="card-header">
@@ -417,7 +421,7 @@
 
 // Settings tabs: show one group of sections, keep it in the URL hash and across saves.
 (function () {
-    const tabs = ["garmin", "liftosaur", "zwift", "backup"];
+    const tabs = ["garmin", "liftosaur", "zwift", "dogs", "backup"];
     const form = document.querySelector('form[action^="/settings"]');
     function show(name) {
         if (!tabs.includes(name)) name = "garmin";
@@ -432,9 +436,10 @@
             // One Save button per tab: on the Zwift tab it submits the Zwift form.
             const save = document.getElementById("settings-save");
             const ownForm = { zwift: "zwift-settings", backup: "backup-settings" }[name];
+            save.hidden = name === "dogs";  // each dog and rule form saves itself
             if (ownForm) save.setAttribute("form", ownForm); else save.removeAttribute("form");
             document.getElementById("settings-save-label").textContent =
-                "Save " + { garmin: "Garmin", liftosaur: "Liftosaur", zwift: "Zwift", backup: "backup" }[name] + " settings";
+                "Save " + { garmin: "Garmin", liftosaur: "Liftosaur", zwift: "Zwift", dogs: "dogs", backup: "backup" }[name] + " settings";
         }
     }
     document.querySelectorAll("[data-tab-button]").forEach(function (b) {

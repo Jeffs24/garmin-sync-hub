@@ -316,3 +316,15 @@ def test_zwift_account_is_connected_from_settings(client, monkeypatch):
     monkeypatch.setattr(m.zwift, "connected", lambda: True)
     assert "Zwift account connected." in c.get(r.headers["location"]).text
     assert 'form="zwift-logout"' in c.get("/settings").text
+
+
+def test_sync_now_runs_a_full_pass_in_the_background(client, monkeypatch):
+    c, m = client
+    done = threading.Event()
+    monkeypatch.setattr(m, "run_scan", lambda: done.set() or True)
+    r = c.post("/zwift/sync-now", headers={"HX-Request": "true"})
+    assert r.status_code == 200 and "Zwift sync started" in r.headers["HX-Trigger"]
+    assert done.wait(2)
+    monkeypatch.setattr(m.garmin, "has_tokens", lambda: False)
+    assert c.post("/zwift/sync-now", headers={"HX-Request": "true"}).status_code == 409
+    assert "/zwift/sync-now" in c.get("/").text

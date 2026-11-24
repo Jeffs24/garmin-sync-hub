@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextvars
+import html
 from contextlib import asynccontextmanager
 import logging
 import os
@@ -108,6 +109,7 @@ backup_module = BackupModule()
 app.include_router(backup_module.router)
 
 from garmin_sync_hub.dogs.web import DogsModule  # noqa: E402
+from garmin_sync_hub.dogs.store import MATCH_MODES as DOG_MATCH_MODES  # noqa: E402
 
 dogs_module = DogsModule()
 app.include_router(dogs_module.router)
@@ -549,11 +551,16 @@ def _liftosaur_summary(config: dict) -> dict[str, Any]:
 
 def _activity_feed() -> list:
     _db = db.get_db()
-    events = activity.build_feed(_db.get_all_synced(), _db.get_failures(), zwift_module.store.all())
+    dogs_state = dogs_module.store.state
+    events = activity.build_feed(_db.get_all_synced(), _db.get_failures(), zwift_module.store.all(),
+                                 activity.dogs_events(dogs_state.recent, dogs_state.dog_name),
+                                 activity.backup_events(backup_module.state.get("runs") or []))
     # A retry time only means something while the automation that retries is on.
     retrying = {
         "liftosaur": bool(load_config().get("auto_sync", {}).get("enabled")),
         "zwift": zwift_module.cfg.auto_merge and zwift_module.cfg.auto_scan,
+        "dogs": dogs_module.store.state.auto,
+        "backup": backup_module.settings.auto,
     }
     for e in events:
         if e.retry_at and not retrying.get(e.source):
@@ -574,6 +581,7 @@ async def overview(request: Request, feed: str = "all"):
         lift=_liftosaur_summary(config),
         zwift=zwift_module.summary(),
         backup=backup_module.summary(),
+        dogs=dogs_module.summary(),
         feed=feed,
         events=activity.filter_events(events, feed)[:10],
         feed_counts=activity.counts(events),
@@ -1042,19 +1050,24 @@ async def mappings_page(request: Request):
 
     CAT_NAMES = _get_cat_names()
 
+    from garmin_sync_hub.liftosaur.mapper import fit_exercise_name
+
+    def label(cat: int, subcat: int) -> str:
+        """What Garmin shows: the category and the exact exercise name."""
+        exercise = fit_exercise_name(cat, subcat)
+        return CAT_NAMES.get(cat, f"Category {cat}") + (f" › {exercise}" if exercise else "")
+
     mappings = []
     for name, (cat, subcat) in sorted(EXERCISE_TO_GARMIN.items()):
-        cat_name = CAT_NAMES.get(cat, f"Category {cat}")
-        mappings.append((name, cat, subcat, cat_name))
+        mappings.append((name, cat, subcat, label(cat, subcat)))
     for name, (cat, subcat) in sorted(_custom_mappings.items()):
-        cat_name = CAT_NAMES.get(cat, f"Category {cat}")
-        mappings.append((name, cat, subcat, f"{cat_name} (custom)"))
+        mappings.append((name, cat, subcat, f"{label(cat, subcat)} (custom)"))
 
     # Unmapped exercises: from the cache only. Scanning Liftosaur takes several API calls,
     # so an old or missing list is refreshed by /liftosaur/mappings/unmapped after the page shows.
     unmapped, fresh = _cached_unmapped()
 
-    custom_list = [(name, cat, subcat, CAT_NAMES.get(cat, f"Category {cat}"))
+    custom_list = [(name, cat, subcat, label(cat, subcat))
                    for name, (cat, subcat) in sorted(_custom_mappings.items())]
 
     return _render(
@@ -1091,6 +1104,8 @@ async def settings_page(request: Request):
         zwift_cfg=zwift_module.cfg,
         zwift_connected=zwift_module.zwift.connected(),
         backup_settings=backup_module.settings,
+        dogs_state=dogs_module.store.state,
+        match_modes=DOG_MATCH_MODES,
         backup_root=backup_module.root,
         rclone_config=backup_module.rclone_config(),
         unmapped=sorted(unmapped.items(), key=lambda x: -x[1]),
@@ -1154,7 +1169,11 @@ async def api_save_mapping(request: Request):
     save_custom_mapping(exercise_name, category, subcategory)
 
     cat_label = _get_cat_names().get(category, f"Category {category}")
-    return HTMLResponse(f'<div class="toast toast-success">Mapped "{exercise_name}" → {cat_label} ({category}:{subcategory}). <a href="/liftosaur/mappings">Reload</a></div>')
+    from garmin_sync_hub.liftosaur.mapper import fit_exercise_name
+
+    exercise = fit_exercise_name(category, subcategory)
+    shown = html.escape(f"{cat_label} › {exercise}" if exercise else cat_label)
+    return HTMLResponse(f'<div class="toast toast-success">Mapped "{html.escape(exercise_name)}" → {shown} ({category}:{subcategory}). <a href="/liftosaur/mappings">Reload</a></div>')
 
 
 @app.post("/api/mapping/delete", response_class=HTMLResponse)
@@ -1197,6 +1216,14 @@ async def api_validate_liftosaur(request: Request):
         return JSONResponse({"valid": True, "workout_count": count})
     except Exception as e:
         return JSONResponse({"valid": False, "error": str(e)}, status_code=400)
+
+
+@app.get("/api/garmin-exercise-names/{category}")
+async def api_garmin_exercise_names(category: int):
+    """Named exercises of a Garmin category, for the mapping forms: [{"sub": 0, "name": "..."}]."""
+    from garmin_sync_hub.liftosaur.mapper import fit_exercise_names
+
+    return JSONResponse([{"sub": sub, "name": name} for sub, name in fit_exercise_names(category)])
 
 
 @app.get("/api/garmin-categories")

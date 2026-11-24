@@ -26,7 +26,8 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 _env = templating.register(Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True))
 
 JOBS = {"discover": "Looking for your dogs", "preview": "Finding matching activities",
-        "apply": "Adding dogs to past activities", "auto": "Adding dogs to new activities"}
+        "apply": "Adding dogs to past activities", "auto": "Adding dogs to new activities",
+        "scheduled": "Adding dogs to new activities"}
 
 
 def _render(name: str, request: Request | None, **ctx) -> HTMLResponse:
@@ -76,9 +77,9 @@ class DogsModule:
                                       "unnamed": [d for d in new if d not in tagger.dog_names]}
             elif kind == "preview":
                 self.matches = tagger.preview()
-                self.job["result"] = {"matching": len(self.matches)}
+                self.job["result"] = {"matching": len(self.matches), **tagger.scan}
             else:
-                tagger.run(full=kind == "apply")
+                tagger.run(full=kind == "apply", scheduled=kind == "scheduled")
                 self.matches = []
                 self.job["result"] = dict(progress.counts)
             self.store.state.last_error = None
@@ -90,7 +91,7 @@ class DogsModule:
             log.exception("Dogs job %s failed", kind)
             self.job["error"] = f"Failed: {e}"
         finally:
-            if self.job["error"] and kind == "auto":
+            if self.job["error"] and kind in ("auto", "scheduled"):
                 self.store.state.last_error = self.job["error"]
             self.store.save()
             self.job["finished"] = datetime.now(timezone.utc)
@@ -118,7 +119,7 @@ class DogsModule:
             timeout = None if due is None else max(0.0, (due - datetime.now(timezone.utc)).total_seconds())
             if timeout == 0:
                 if self.garmin.has_tokens() and not self.running:
-                    self.run_job("auto")
+                    self.run_job("scheduled")
                 if self._due() and self._due() <= datetime.now(timezone.utc):
                     self._stop.wait(300)  # the run failed before recording itself: retry later
                 continue
@@ -134,9 +135,16 @@ class DogsModule:
         self._wake.set()
 
     def summary(self) -> dict:
+        """Counts for the Overview card."""
         s = self.store.state
-        return {"dogs": len(s.dogs), "rules": len(s.rules), "tagged": sum(1 for v in s.tagged.values() if v),
-                "auto": s.auto, "last_error": s.last_error}
+        return {
+            "dogs": len(s.dogs), "rules": len(s.rules), "dog_names": list(s.dogs.values()),
+            "tagged": sum(1 for v in s.tagged.values() if v),
+            "failed": sum(1 for e in s.recent if not e.get("ok", True)),
+            "auto": s.auto and bool(s.rules), "interval_minutes": s.interval_minutes,
+            "next_run": self._due(), "running": self.running, "last_error": s.last_error,
+            "last_run": datetime.fromisoformat(s.last_run) if s.last_run else None,
+        }
 
     # --- routes -------------------------------------------------------------
 
@@ -154,9 +162,11 @@ class DogsModule:
                     "match_modes": MATCH_MODES, "intervals": DOG_INTERVALS, "autosync_line": line,
                     "garmin_connected": m.garmin.has_tokens()}
 
-        def back(error: str | None = None, saved: bool = False) -> RedirectResponse:
+        def back(error: str | None = None, saved: bool = False, to: str = "") -> RedirectResponse:
+            """Back to the page the form was on: Settings → Dogs, or the Dogs page."""
             query = urlencode({"error": error}) if error else ("saved=dogs" if saved else "")
-            return RedirectResponse("/dogs" + (f"?{query}" if query else ""), status_code=303)
+            base, anchor = ("/settings", "#dogs") if to == "settings" else ("/dogs", "")
+            return RedirectResponse(base + (f"?{query}" if query else "") + anchor, status_code=303)
 
         @router.get("", response_class=HTMLResponse)
         def page(request: Request) -> HTMLResponse:
@@ -168,14 +178,18 @@ class DogsModule:
 
         @router.post("/run/{kind}", response_class=HTMLResponse)
         def run(request: Request, kind: str) -> HTMLResponse:
-            if kind not in ("discover", "preview", "apply"):
+            if kind not in ("discover", "preview", "apply", "auto"):
                 raise HTTPException(404)
             if not m.garmin.has_tokens():
                 raise HTTPException(409, "Connect Garmin first (Settings → Garmin).")
             if kind != "discover" and not m.store.state.rules:
-                raise HTTPException(409, "Add a rule first.")
-            m.start_job(kind)
-            return _render("partials/dogs_status.html", request, **ctx())
+                raise HTTPException(409, "Add a rule first (Dogs page).")
+            started = m.start_job(kind)
+            response = _render("partials/dogs_status.html", request, **ctx())
+            if kind == "auto":  # "Sync now": the latest 100 activities
+                message = "Dogs sync started on your latest activities." if started else "A dogs job is already running."
+                response.headers["HX-Trigger"] = templating.notice_headers(message, "success" if started else "info")["HX-Trigger"]
+            return response
 
         @router.post("/stop", response_class=HTMLResponse)
         def stop_job(request: Request) -> HTMLResponse:
@@ -183,39 +197,40 @@ class DogsModule:
             return _render("partials/dogs_status.html", request, **ctx())
 
         @router.post("/dog")
-        def save_dog(dog_id: str = Form(...), name: str = Form("")) -> RedirectResponse:
+        def save_dog(dog_id: str = Form(...), name: str = Form(""), next: str = Form("")) -> RedirectResponse:
             try:
                 m.store.set_dog(dog_id, name)
             except ValueError as e:
-                return back(str(e))
-            return back(saved=True)
+                return back(str(e), to=next)
+            return back(saved=True, to=next)
 
         @router.post("/dog/{dog_id}/delete")
-        def delete_dog(dog_id: str) -> RedirectResponse:
+        def delete_dog(dog_id: str, next: str = "") -> RedirectResponse:
             try:
                 m.store.remove_dog(dog_id)
             except ValueError as e:
-                return back(str(e))
-            return back(saved=True)
+                return back(str(e), to=next)
+            return back(saved=True, to=next)
 
         @router.post("/rules")
-        def add_rule(name: str = Form(""), dog_id: str = Form(""), match: str = Form("exact")) -> RedirectResponse:
+        def add_rule(name: str = Form(""), dog_id: str = Form(""), match: str = Form("exact"),
+                     next: str = Form("")) -> RedirectResponse:
             try:
                 m.store.add_rule(name, dog_id, match)
             except ValueError as e:
-                return back(str(e))
+                return back(str(e), to=next)
             m.matches = []
             m._wake.set()
-            return back(saved=True)
+            return back(saved=True, to=next)
 
         @router.post("/rules/{index}/delete")
-        def delete_rule(index: int) -> RedirectResponse:
+        def delete_rule(index: int, next: str = "") -> RedirectResponse:
             try:
                 m.store.remove_rule(index)
             except ValueError as e:
-                return back(str(e))
+                return back(str(e), to=next)
             m.matches = []
-            return back(saved=True)
+            return back(saved=True, to=next)
 
         @router.post("/autosync", response_class=HTMLResponse)
         def autosync(enabled: str = Form("false"), interval: str = Form("")) -> HTMLResponse:

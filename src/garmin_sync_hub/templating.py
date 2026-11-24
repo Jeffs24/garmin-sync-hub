@@ -1,6 +1,8 @@
 """Jinja filters shared by the main app and the Zwift module (each has its own Environment)."""
 from __future__ import annotations
 
+import json
+
 from jinja2 import Environment
 
 
@@ -34,7 +36,23 @@ def filesize(size: int | float | None) -> str:
     return f"{size:.1f} GB"
 
 
+def notice_headers(message: str, kind: str = "success") -> dict[str, str]:
+    """HTMX response headers that show a floating notice (notify() in base.html) and swap nothing."""
+    return {"HX-Trigger": json.dumps({"notify": {"message": message, "kind": kind}}), "HX-Reswap": "none"}
+
+
+def fromiso(value):
+    """ISO 8601 text (as saved in JSON state files) -> aware datetime, for local_time()."""
+    from datetime import datetime, timezone
+
+    if not value or not isinstance(value, str):
+        return value
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def register(env: Environment) -> Environment:
     env.filters["interval_label"] = interval_label
     env.filters["filesize"] = filesize
+    env.filters["fromiso"] = fromiso
     return env

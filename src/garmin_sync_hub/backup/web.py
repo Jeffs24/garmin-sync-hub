@@ -17,7 +17,7 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader
 
-from .. import templating
+from .. import retry, templating
 from ..auth import auth_enabled
 from ..garmin_session import GarminAuthRequired, shared_session
 from ..paths import data_dir
@@ -26,6 +26,8 @@ from .rclone_check import check_destination
 from .settings import BACKUP_INTERVALS, BackupSettings, backup_dir
 
 log = logging.getLogger(__name__)
+
+RUNS_KEPT = 100  # backup runs kept for the Activity feed
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 _env = templating.register(Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), autoescape=True))
@@ -141,10 +143,18 @@ class BackupModule:
                 counts["size"] = folder_size(self.root) if self.root.exists() else 0
             except OSError:
                 pass
+            stopped = error is not None and error.startswith("Stopped")
+            failures = 0 if error is None or stopped else int(self.state.get("failures") or 0) + 1
+            retry_at = retry.next_retry(failures, finished) if failures else None
             self.state.update(last_finished=_iso(finished), error=error, counts=counts,
-                              warnings=progress.warnings[:20])
+                              warnings=progress.warnings[:20], failures=failures, retry_at=_iso(retry_at))
             if error is None:
                 self.state["last_ok"] = _iso(finished)
+            run = {"at": _iso(finished), "ok": error is None, "stopped": stopped, "error": error,
+                   "activities_new": progress.counts.get("activities_new", 0),
+                   "health_days_new": progress.counts.get("health_days_new", 0),
+                   "warnings": len(progress.warnings), "retry_at": _iso(retry_at)}
+            self.state["runs"] = [run, *(self.state.get("runs") or [])][:RUNS_KEPT]
             self._save_state()
             self._lock.release()
         return True
@@ -161,12 +171,16 @@ class BackupModule:
     # --- schedule -----------------------------------------------------------
 
     def _due(self) -> datetime | None:
+        """Next scheduled run: the interval, or sooner after a failure (30 min, 2 h, 8 h, like the
+        other sources); after the last retry, back to the interval."""
         if not self.settings.auto:
             return None
         last = _parse(self.state.get("last_finished"))
         if last is None:
             return datetime.now(timezone.utc)
-        return last + timedelta(minutes=self.settings.interval_minutes)
+        due = last + timedelta(minutes=self.settings.interval_minutes)
+        retry_at = _parse(self.state.get("retry_at"))
+        return min(due, retry_at) if retry_at else due
 
     def _loop(self) -> None:
         while not self._stop.is_set():
@@ -271,8 +285,11 @@ class BackupModule:
         def run_now(request: Request) -> HTMLResponse:
             if not m.garmin.has_tokens():
                 raise HTTPException(409, "Connect Garmin first (Settings → Garmin).")
-            m.start_run()
-            return _render("partials/backup_status.html", request, **page_ctx())
+            started = m.start_run()
+            response = _render("partials/backup_status.html", request, **page_ctx())
+            message = "Backup started: it adds only what is new." if started else "A backup is already running."
+            response.headers["HX-Trigger"] = templating.notice_headers(message, "success" if started else "info")["HX-Trigger"]
+            return response
 
         @router.post("/stop", response_class=HTMLResponse)
         def stop_run(request: Request) -> HTMLResponse:

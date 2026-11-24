@@ -241,7 +241,7 @@ def test_backup_page_and_overview(hub, monkeypatch):
     assert "What is saved" in page and "gear/" in page
     assert 'href="/backup" class="active"' in page
     overview = c.get("/").text
-    assert "src-backup" in overview and "Set up backup" in overview
+    assert "src-backup" in overview and "Back up now" in overview
 
 
 def test_run_writes_state_and_counts(hub, monkeypatch):
@@ -372,3 +372,33 @@ def test_rclone_test_button_shows_the_checks(hub, monkeypatch):
     r = c.post("/backup/rclone/test", data={"remote": "gdrive:Backups"})
     assert "state-warning" in r.text and "only sees the folders it created" in r.text
     assert "Folders at gdrive:: Backups" in r.text
+
+
+def test_backup_runs_show_in_the_activity_feed():
+    from garmin_sync_hub import activity
+
+    runs = [{"at": "2026-11-23T03:00:00+00:00", "ok": False, "stopped": False, "error": "Garmin refused the sign-in",
+             "retry_at": "2026-11-23T03:30:00+00:00"},
+            {"at": "2026-11-22T03:00:00+00:00", "ok": True, "activities_new": 2, "health_days_new": 1, "warnings": 0},
+            {"at": "2026-11-21T03:00:00+00:00", "ok": True},
+            {"at": "2026-11-20T03:00:00+00:00", "ok": False, "stopped": True, "error": "Stopped."}]
+    failed, saved, same, stopped = activity.backup_events(runs)
+    assert (failed.state, failed.result, failed.retry_at.minute) == ("failed", "Failed", 30)
+    assert saved.result == "2 activities, 1 day of health data saved" and saved.link == "/backup"
+    assert same.result == "Up to date" and stopped.state == "muted"
+    feed = activity.build_feed([], [], [], [], activity.backup_events(runs))
+    assert activity.counts(feed)["backup"] == 4 and activity.counts(feed)["attention"] == 1
+
+
+def test_failed_backup_is_retried_sooner(hub, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    _, m = hub
+    m.settings.auto, m.settings.interval_minutes = True, 1440
+    monkeypatch.setattr(m.garmin, "client", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    m.run()
+    assert m.state["failures"] == 1 and m.state["runs"][0]["ok"] is False
+    last = datetime.fromisoformat(m.state["last_finished"])
+    assert m._due() - last == timedelta(minutes=30)  # not 24 h
+    m.state.update(failures=0, retry_at=None, error=None)
+    assert m._due() - last == timedelta(hours=24)

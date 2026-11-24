@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .. import retry
 from ..backup.engine import PacedGarmin, StopBackup
 from .store import MAX_DOGS_PER_ACTIVITY, DogsStore
 
@@ -23,7 +24,7 @@ log = logging.getLogger(__name__)
 
 RECENT_PAGES = 1       # automatic runs look at the 100 latest activities
 DISCOVER_LIMIT = 40    # activities read when looking for dogs
-RECENT_KEPT = 30
+LOG_KEPT = 1000      # dogs added and failures kept for the Activity feed
 PETS_PATH = "/family-api/profile-service/profile/pets"
 
 
@@ -32,12 +33,28 @@ def dog_ids(metadata: dict | None) -> list[int]:
     return [int(i) for i in ids if str(i).isdigit()]
 
 
+def scan_summary(activities: list[dict], store: DogsStore) -> dict[str, Any]:
+    """What a preview looked at: how many activities, back to when, and names that look like a
+    dog activity but match no rule (a different spelling is the usual reason a walk is missed)."""
+    state = store.state
+    starts = sorted(str(a.get("startTimeLocal") or "")[:10] for a in activities if a.get("startTimeLocal"))
+    near: dict[str, int] = {}
+    for a in activities:
+        name = (a.get("activityName") or "").strip()
+        if not state.dogs_for(name) and any(w in name.casefold() for w in ("dog", "chien", "walk", "marche")):
+            near[name] = near.get(name, 0) + 1
+    return {"checked": len(activities), "oldest": starts[0] if starts else None,
+            "matching_total": sum(1 for a in activities if state.dogs_for(a.get("activityName"))),
+            "near_misses": sorted(near.items(), key=lambda kv: -kv[1])[:10]}
+
+
 class DogTagger(PacedGarmin):
     def __init__(self, client_factory, store: DogsStore, **kwargs):
         super().__init__(client_factory, **kwargs)
         self.store = store
         self.matches: list[dict[str, Any]] = []   # last preview
         self.dog_names: dict[int, str] = {}       # names from the Garmin profile, set by discover()
+        self.scan: dict[str, Any] = {}            # what the last preview looked at
 
     # --- finding dogs -------------------------------------------------------
 
@@ -96,11 +113,18 @@ class DogTagger(PacedGarmin):
 
     # --- tagging --------------------------------------------------------------
 
-    def candidates(self, activities: list[dict]) -> list[dict[str, Any]]:
-        """Activities the rules select that still miss a dog (as far as we know)."""
+    def candidates(self, activities: list[dict], scheduled: bool = False) -> list[dict[str, Any]]:
+        """Activities the rules select that still miss a dog (as far as we know).
+
+        scheduled: leave out failures whose next try is not due (or that have no try left),
+        like Liftosaur and Zwift; a click always tries them again.
+        """
         state = self.store.state
+        held = self._held_failures() if scheduled else set()
         out = []
         for a in activities:
+            if int(a["activityId"]) in held:
+                continue
             wanted = state.dogs_for(a.get("activityName"))
             done = set(state.tagged.get(str(a["activityId"]), []))
             missing = [d for d in wanted if d not in done]
@@ -111,14 +135,26 @@ class DogTagger(PacedGarmin):
 
     def preview(self) -> list[dict[str, Any]]:
         self.p.phase = "preview"
-        self.matches = self.candidates(self.list_activities())
+        activities = self.list_activities()
+        self.matches = self.candidates(activities)
         self.p.counts["matching"] = len(self.matches)
+        self.scan = scan_summary(activities, self.store)
         return self.matches
 
-    def run(self, full: bool = False) -> None:
+    def _held_failures(self) -> set[int]:
+        now = datetime.now(timezone.utc)
+        held = set()
+        for e in self.store.state.recent:
+            if not e.get("ok", True):
+                retry_at = retry.parse(e.get("retry_at"))
+                if retry_at is None or retry_at > now:
+                    held.add(e["id"])
+        return held
+
+    def run(self, full: bool = False, scheduled: bool = False) -> None:
         """Add the missing dogs. full: every activity; otherwise the latest ones only."""
         self.p.phase = "list"
-        todo = self.candidates(self.list_activities(max_pages=None if full else RECENT_PAGES))
+        todo = self.candidates(self.list_activities(max_pages=None if full else RECENT_PAGES), scheduled)
         self.p.phase, self.p.total, self.p.done = "tag", len(todo), 0
         try:
             for item in reversed(todo):  # oldest first
@@ -140,18 +176,40 @@ class DogTagger(PacedGarmin):
             wanted = current + [d for d in item["dogs"] if d not in current]
             if wanted != current:
                 if len(wanted) > MAX_DOGS_PER_ACTIVITY:
-                    self.p.warn(f"{item['name']} ({activity_id}): Garmin allows {MAX_DOGS_PER_ACTIVITY} dogs at most")
+                    self._log(item, ok=False, error=f"Garmin allows {MAX_DOGS_PER_ACTIVITY} dogs at most")
                     return
                 metadata.update(hasDog=True, dogProfileIds=wanted)
                 self.call(self.g.update_activity, activity_id, {"metadataDTO": metadata})
                 self.p.counts["tagged"] = self.p.counts.get("tagged", 0) + 1
-                state.recent.insert(0, {"id": item["id"], "name": item["name"], "start": item["start"],
-                                        "dogs": [d for d in wanted if d not in current]})
-                del state.recent[RECENT_KEPT:]
+                self._log(item, dogs=[d for d in wanted if d not in current])
             else:
                 self.p.counts["already"] = self.p.counts.get("already", 0) + 1
+                self._forget_failures(item["id"])
             state.tagged[activity_id] = wanted
         except (InterruptedError, StopBackup):
             raise
         except Exception as e:  # noqa: BLE001 - one activity never stops the others
-            self.p.warn(f"{item['name']} ({activity_id}): {e}")
+            self._log(item, ok=False, error=str(e))
+
+    def _log(self, item: dict[str, Any], *, ok: bool = True, dogs: list[int] | None = None,
+             error: str | None = None) -> None:
+        """Keep what happened for the Dogs page and the Activity feed (newest first)."""
+        attempts = 1 + max((e.get("attempts", 1) for e in self.store.state.recent
+                            if not e.get("ok", True) and e["id"] == item["id"]), default=0)
+        self._forget_failures(item["id"])
+        now = datetime.now(timezone.utc)
+        entry = {"id": item["id"], "name": item["name"], "start": item["start"], "dogs": dogs or item["dogs"],
+                 "at": now.isoformat(timespec="seconds"), "ok": ok}
+        if not ok:
+            entry["error"] = (error or "")[:300]
+            entry["attempts"] = attempts
+            entry["retry_at"] = retry.to_text(retry.next_retry(attempts, now))
+            self.p.warn(f"{item['name']} ({item['id']}): {error}")
+        log = self.store.state.recent
+        log.insert(0, entry)
+        del log[LOG_KEPT:]
+
+    def _forget_failures(self, activity_id: int) -> None:
+        """A failure no longer needs attention once the activity has its dog."""
+        log = self.store.state.recent
+        log[:] = [e for e in log if e.get("ok", True) or e["id"] != activity_id]

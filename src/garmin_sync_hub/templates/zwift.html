@@ -24,22 +24,27 @@
 {% endif %}
 
 {% if tab == "pairs" %}
-<div class="card">
-    <div class="zw-row" style="justify-content: space-between;">
+<div class="card source-top src-zwift">
+    <div class="source-top-head">
         <div>
-            Mode {% if cfg.auto_merge %}<b>automatic</b>: every detected pair is merged{% else %}<b>manual</b>: nothing changes until you click “Merge”{% endif %}.
-            Scans cover the last {{ cfg.scan_days }} days. <a href="/settings#zwift">Change</a>
+            <div class="source-top-main">{{ merged }} map{{ '' if merged == 1 else 's' }} added{% if waiting %} · <span class="state-pending">{{ waiting }} ready</span>{% endif %}</div>
+            <div class="source-top-meta">
+                {% if last_scan %}Last sync {{ ui.local_time(last_scan) }} · {% endif %}
+                {% if cfg.auto_merge %}Automatic merge: every pair found is merged{% else %}Merge on demand: nothing changes until you click Merge{% endif %}
+                · last {{ cfg.scan_days }} days · <a href="/settings#zwift">Change</a>
+            </div>
         </div>
-        <div class="zw-actions">
-            <form method="post" action="/zwift/scan"><button class="btn btn-secondary btn-sm">Scan now</button></form>
+        <div class="source-top-actions">
+            <button class="btn btn-primary btn-sm" hx-post="/zwift/sync-now" hx-disabled-elt="this" {% if not garmin_connected %}disabled{% endif %}
+                    title="Find pairs, fetch new Zwift rides{{ ', merge' if cfg.auto_merge }}">Sync now</button>
             {% if waiting %}
             <form method="post" action="/zwift/merge-all" onsubmit="return confirm('Merge all {{ waiting }} pairs on Garmin?')">
-                <button class="btn btn-primary btn-sm">Merge all ({{ waiting }})</button>
+                <button class="btn btn-secondary btn-sm">Merge all ({{ waiting }})</button>
             </form>
             {% endif %}
         </div>
     </div>
-    {% if last_error %}<p class="state-failed zw-msg">Last error: {{ last_error }}</p>{% endif %}
+    {% if last_error %}<p class="source-top-error">Last sync failed: {{ last_error }}</p>{% endif %}
 
     <div class="autosync-block">
     {% set zw_hint = "scan" ~ (", fetch from Zwift" if cfg.zwift_auto_sync and zwift_connected else "") ~ (", merge" if cfg.auto_merge else "") %}

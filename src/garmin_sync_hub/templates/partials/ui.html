@@ -29,7 +29,7 @@
 {%- endmacro %}
 
 {% macro feed_tabs(base_url, param, current, counts) -%}
-{{ filter_tabs(base_url, param, current, {"all": "All", "liftosaur": "Liftosaur", "zwift": "Zwift", "attention": "Needs attention"}, counts, alert=("attention",), aria_label="Filter activity") }}
+{{ filter_tabs(base_url, param, current, {"all": "All", "liftosaur": "Liftosaur", "zwift": "Zwift", "dogs": "Dogs", "backup": "Backup", "attention": "Needs attention"}, counts, alert=("attention",), aria_label="Filter activity") }}
 {%- endmacro %}
 
 {# A UTC datetime shown in the viewer's time zone. #}
