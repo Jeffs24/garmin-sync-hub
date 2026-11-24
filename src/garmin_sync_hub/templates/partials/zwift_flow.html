@@ -27,7 +27,7 @@
         <!-- 2. Pair -->
         <rect x="210" y="75" width="150" height="62" rx="8" fill="rgba(59,130,246,0.08)" stroke="rgba(59,130,246,0.35)" stroke-dasharray="6,3"/>
         <text x="285" y="100" text-anchor="middle" fill="#93c5fd" font-size="13" font-weight="700">Pair</text>
-        <text x="285" y="117" text-anchor="middle" fill="#64748b" font-size="10">overlap ≥ {{ (cfg.min_overlap * 100)|round|int }}%, last {{ cfg.scan_days }} days</text>
+        <text x="285" y="117" text-anchor="middle" fill="#64748b" font-size="10">overlap ≥ {{ (cfg.min_overlap * 100)|round|int }}%, since the last scan</text>
         <line x1="363" y1="106" x2="395" y2="106" stroke="#64748b" stroke-width="1.5" marker-end="url(#zf-arrow)"/>
 
         <!-- 3. Merge FIT -->
@@ -69,7 +69,7 @@
     </svg>
     </div>
     <p class="pipeline-note">
-        Pairs are looked for every {{ cfg.scan_interval_minutes|interval_label }} over the last {{ cfg.scan_days }} days (Check now: the whole history), and {% if cfg.auto_merge %}merged right away (auto-sync is on){% else %}wait in Not synced for a click on Merge (auto-sync is off){% endif %}.
+        {% if cfg.auto_scan %}Auto-scan looks for pairs every {{ cfg.scan_interval_minutes|interval_label }}, back to the last scan that worked (3 days of margin){% else %}Auto-scan is off: pairs are looked for when you click Check now{% endif %}; Check now reads the whole history. What a scan finds is {% if cfg.auto_merge %}merged right away (auto-sync is on){% else %}listed as not synced until you click Merge (auto-sync is off){% endif %}.
         Each watch point gets the Zwift position closest in time (within {{ cfg.time_tolerance_s }} s); everything else in the watch file is kept.
         Nothing is deleted before the merged activity is on Garmin. Backups stay in <code>data/zwift_backups</code>.
     </p>
