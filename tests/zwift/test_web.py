@@ -36,15 +36,17 @@ def test_zwift_page_lists_pairs_and_escapes(client):
     assert "Zwift - Watopia" in r.text
     assert "Treadmill &lt;b&gt;" in r.text
     assert "/zwift/pairs/1/merge" in r.text
-    assert "Merge all (1)" in r.text
+    assert "Sync all (1)" in r.text and "Check now" in r.text
     assert 'href="/zwift" class="active"' in r.text
-    assert "Settings → Zwift" in c.get("/zwift/account").text  # the account is connected from Settings
+    # The old History and files page: account and file upload are in Settings → Zwift
+    old = c.get("/zwift/account", follow_redirects=False)
+    assert old.status_code == 303 and old.headers["location"] == "/settings#zwift"
 
 
 def test_get_on_action_urls_goes_back_to_the_page(client):
     c, _ = client
-    for path, target in ((("/zwift/scan", "/zwift"), ("/zwift/merge-all", "/zwift"),
-                          ("/zwift/sync", "/zwift/account"), ("/zwift/login", "/settings#zwift"))):
+    for path, target in ((("/zwift/scan", "/zwift"), ("/zwift/merge-all", "/zwift"), ("/zwift/check", "/zwift"),
+                          ("/zwift/sync", "/zwift"), ("/zwift/upload", "/settings#zwift"), ("/zwift/login", "/settings#zwift"))):
         r = c.get(path, follow_redirects=False)
         assert r.status_code == 303 and r.headers["location"] == target
 
@@ -64,20 +66,29 @@ def test_merge_all_queues_waiting_pairs(client, monkeypatch):
     assert page.count('hx-trigger="every 3s"') == 2
 
 
-def test_preview_page(client):
+def test_preview_opens_in_the_card(client):
+    """Map and charts load into the pair's card (no separate page), like a workout's heart rate."""
     c, m = client
+    hx = {"HX-Request": "true"}
     m.store.upsert_detected(1, 2, "Treadmill Run", "Zwift - Watopia", "2026-11-20T12:00:00+00:00", 0.97)
-    r = c.get("/zwift/pairs/1/preview")
-    assert "Simulate" in r.text and "first" in r.text
+    r = c.get("/zwift/pairs/1/preview", headers=hx)
+    assert "Simulate" in r.text and "first" in r.text and "<html" not in r.text
     folder = m.cfg.backup_dir / "1"
     folder.mkdir(parents=True)
     merged, _ = merge_track(watch_fit(START, 120), zwift_fit(START, 120))
     (folder / "1_merged.fit").write_bytes(merged)
-    r = c.get("/zwift/pairs/1/preview")
+    r = c.get("/zwift/pairs/1/preview", headers=hx)
     assert r.status_code == 200
-    assert "L.polyline" in r.text and "Heart rate" in r.text
-    assert "delete the watch activity #1 and the Zwift copy #2" in r.text
-    assert c.get("/zwift/pairs/99/preview").status_code == 404
+    assert "L.polyline" in r.text and "Heart rate" in r.text and 'id="zw-map-1"' in r.text
+    assert "deletes the watch activity #1 and the Zwift copy #2" in r.text
+    assert c.get("/zwift/pairs/99/preview", headers=hx).status_code == 404
+    old_link = c.get("/zwift/pairs/1/preview", follow_redirects=False)  # opened as a page: back to the card
+    assert old_link.status_code == 303 and old_link.headers["location"] == "/zwift#pair-1"
+
+    m.store.set_status(1, "simulated", "ok")
+    page = c.get("/zwift").text
+    assert 'hx-get="/zwift/pairs/1/preview" hx-trigger="toggle once"' in page and "Map and charts" in page
+    assert 'href="/zwift/pairs/1/preview"' not in page
 
 
 def test_overview_shows_every_source(client, monkeypatch):
@@ -86,9 +97,9 @@ def test_overview_shows_every_source(client, monkeypatch):
     monkeypatch.setattr(server, "load_config", lambda: {"liftosaur_api_key": "", "user_profile": {}})
     r = c.get("/")
     assert r.status_code == 200
-    assert "1 ready" in r.text and "Review 1 pair" in r.text
+    assert "1 not synced" in r.text and "Review 1 pair" in r.text
     assert "Add your Liftosaur API key" in r.text
-    assert "Ready to merge" in r.text  # the pair is in the activity feed
+    assert "Not synced" in r.text  # the pair is in the activity feed
     assert "Zwift → Garmin" in r.text
 
 
@@ -117,7 +128,8 @@ def test_activity_page_filters_by_source(client, monkeypatch):
 def test_old_pages_redirect(client):
     c, _ = client
     for old, new in (("/history", "/activity?source=liftosaur"), ("/workouts", "/liftosaur/workouts"),
-                     ("/mappings", "/liftosaur/mappings")):
+                     ("/mappings", "/settings/liftosaur/mappings"),
+                     ("/liftosaur/mappings", "/settings/liftosaur/mappings")):
         r = c.get(old, follow_redirects=False)
         assert r.status_code == 307 and r.headers["location"] == new
 
@@ -129,7 +141,11 @@ def test_settings_has_one_tab_per_source(client, monkeypatch):
     assert r.status_code == 200
     for tab in ("garmin", "liftosaur", "zwift"):
         assert f'data-tab-button="{tab}"' in r.text and f'data-tab="{tab}"' in r.text
-    assert 'action="/zwift/settings"' in r.text and 'name="auto_merge"' in r.text
+    assert 'action="/zwift/settings"' in r.text and 'name="min_overlap"' in r.text
+    # Every source's auto-sync switch is in Settings too, and the Zwift file upload
+    for prefix in ("set-lift-autosync", "set-zw-autosync", "set-dogs-autosync", "set-bk-autosync"):
+        assert f'id="{prefix}-toggle"' in r.text
+    assert 'action="/zwift/upload"' in r.text and 'href="/settings/liftosaur/mappings"' in r.text
 
 
 def test_settings_never_calls_the_liftosaur_api(client, monkeypatch):
@@ -165,7 +181,7 @@ def own_cfg(client, monkeypatch, tmp_path):
     import dataclasses
 
     c, m = client
-    cfg = dataclasses.replace(m.cfg, data_dir=tmp_path, auto_scan=True, auto_merge=False, scan_interval_minutes=30)
+    cfg = dataclasses.replace(m.cfg, data_dir=tmp_path, auto_merge=True, scan_interval_minutes=30)
     monkeypatch.setattr(m, "cfg", cfg)
     monkeypatch.setattr(m.service, "cfg", cfg)
     return c, m
@@ -176,41 +192,66 @@ def test_zwift_settings_are_saved_and_applied(own_cfg):
 
     c, m = own_cfg
     r = c.post("/zwift/settings", data={
-        "auto_scan": ["off"], "auto_merge": ["off", "on"], "scan_interval_minutes": "60",
-        "scan_days": "14", "min_overlap": "0.6",
+        "auto_merge": ["off"], "scan_interval_minutes": "60", "min_overlap": "0.6",
     }, follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/settings?saved=zwift#zwift"
-    assert (m.cfg.auto_scan, m.cfg.auto_merge, m.cfg.scan_interval_minutes, m.cfg.scan_days) == (False, True, 60, 14)
+    assert (m.cfg.auto_merge, m.cfg.scan_interval_minutes) == (False, 60)
     assert m.cfg.min_overlap == 0.6
-    assert m.state["next_scan"] is None  # auto-sync is off
+    assert m.state["next_scan"] is not None  # auto-sync off: auto-scan still looks for pairs
 
     reloaded = Config.defaults()
     reloaded.data_dir = m.cfg.data_dir
     import json
     reloaded.update(json.loads(m.cfg.settings_file.read_text()))
-    assert reloaded.auto_merge is True and reloaded.scan_days == 14
+    assert reloaded.auto_merge is False and reloaded.min_overlap == 0.6
 
     page = c.get("/settings")
-    assert 'name="scan_days"' in page.text and 'value="14"' in page.text
+    assert 'name="min_overlap"' in page.text and 'value="0.6"' in page.text
+    assert 'name="scan_days"' not in page.text  # no period to set: a scan looks back to the last one
 
 
 def test_bad_zwift_settings_change_nothing(own_cfg):
     c, m = own_cfg
-    r = c.post("/zwift/settings", data={"scan_days": "0", "auto_merge": "on"}, follow_redirects=False)
+    r = c.post("/zwift/settings", data={"min_overlap": "5", "auto_merge": "off"}, follow_redirects=False)
     assert r.status_code == 303 and "error=Zwift+settings+not+saved" in r.headers["location"]
-    assert m.cfg.auto_merge is False and m.cfg.scan_days != 0
-    assert "between 1 and 365" in c.get(r.headers["location"]).text
+    assert m.cfg.auto_merge is True and m.cfg.min_overlap != 5
+    assert "between 0 and 1" in c.get(r.headers["location"]).text
 
 
-def test_zwift_autosync_toggle(own_cfg):
+def test_zwift_autoscan_and_autosync_switches(own_cfg):
     c, m = own_cfg
-    page = c.get("/zwift")
-    assert 'id="zw-autosync-toggle"' in page.text and "toggle-track active" in page.text
-    r = c.post("/zwift/autosync", data={"enabled": "false", "interval": "120"})
-    assert r.status_code == 200 and "Off" in r.text
-    assert m.cfg.auto_scan is False and m.cfg.scan_interval_minutes == 120
-    r = c.post("/zwift/autosync", data={"enabled": "true", "interval": "120"})
+    page = c.get("/zwift").text
+    assert 'id="zw-autoscan-toggle"' in page and 'id="zw-autosync-toggle"' in page
+    r = c.post("/zwift/autoscan", data={"enabled": "false", "interval": "120"})
+    assert r.status_code == 200 and r.text.startswith("Off:") and "Check now" in r.text
+    assert m.cfg.auto_scan is False and m.cfg.scan_interval_minutes == 120 and m.state["next_scan"] is None
+    r = c.post("/zwift/autoscan", data={"enabled": "true", "interval": "120"})
     assert m.cfg.auto_scan is True and "Next:" in r.text
+    r = c.post("/zwift/autosync", data={"enabled": "false"})
+    assert r.text.startswith("Off:") and m.cfg.auto_merge is False and m.cfg.auto_scan is True
+
+
+def test_scheduled_check_finds_pairs_and_merges_only_with_auto_sync(own_cfg, monkeypatch):
+    _, m = own_cfg
+    calls = []
+    monkeypatch.setattr(m.service, "scan", lambda days=None: calls.append(("scan", days)))
+    monkeypatch.setattr(m.service, "merge", lambda tid: calls.append(("merge", tid)))
+    monkeypatch.setattr(m.zwift, "connected", lambda: False)
+    m.store.upsert_detected(1, 2, "Run", "Zwift", "2026-11-20T12:00:00+00:00", 0.97)
+    m.cfg.auto_merge = False
+    assert m.run_scan()
+    assert calls == [("scan", calls[0][1])] and calls[0][1] > 3000  # first scan: the whole history, no merge
+    calls.clear()
+    assert m.run_scan()
+    assert calls == [("scan", 4)]  # then back to the last scan that worked, minus 3 days
+    calls.clear()
+    m.cfg.auto_merge = True
+    assert m.run_scan()
+    assert ("merge", 1) in calls  # auto-sync: what was found is merged
+    calls.clear()
+    m.store.set_status(1, "detected", None)
+    assert m.run_scan(full=True)  # Check now: the whole history, merged too with auto-sync on
+    assert calls[0][0] == "scan" and calls[0][1] > 3000 and ("merge", 1) in calls
 
 
 def test_scan_loop_waits_and_wakes_on_settings_change(own_cfg):
@@ -218,28 +259,21 @@ def test_scan_loop_waits_and_wakes_on_settings_change(own_cfg):
 
     _, m = own_cfg
     m._stop, m._wake = threading.Event(), threading.Event()  # a previous app shutdown set _stop
-    m.cfg.auto_scan = False
+    m.state["last_scan"] = datetime.now(timezone.utc)
+    m.cfg.scan_interval_minutes = 1440
     done = threading.Event()
     t = threading.Thread(target=lambda: (m._wait_for_next_scan(), done.set()), daemon=True)
     t.start()
-    assert not done.wait(0.2)  # off: waits for a change
-    m.state["last_scan"] = datetime.now(timezone.utc) - timedelta(hours=1)
-    m.cfg.auto_scan = True
+    assert not done.wait(0.2)  # checked just now: waits for the interval
+    m.state["last_scan"] = datetime.now(timezone.utc) - timedelta(days=2)
     m.settings_changed()
-    assert done.wait(2)  # on, and a scan is overdue: returns right away
+    assert done.wait(2)  # a check is overdue: returns right away
 
 
-def test_pairs_page_explains_the_merge_with_current_settings(own_cfg):
+def test_pairs_page_links_to_how_it_works_in_settings(own_cfg):
     c, m = own_cfg
-    m.cfg.copy_altitude, m.cfg.delete_source = False, True
     page = c.get("/zwift").text
-    assert "How it works" in page and "<details class=\"card pipeline\" open" in page  # open while no pairs
-    assert "watch data + GPS<" in page and "watch + Zwift copy" in page
-    m.cfg.copy_altitude, m.cfg.delete_source = True, False
-    m.store.upsert_detected(1, 2, "Run", "Zwift", "2026-11-20T12:00:00+00:00", 0.97)
-    page = c.get("/zwift").text
-    assert "watch data + GPS + altitude" in page and "watch (copy kept)" in page
-    assert "<details class=\"card pipeline\" open" not in page
+    assert 'href="/settings#zwift">How it works' in page and "card pipeline" not in page  # moved to Settings
 
 
 def test_restore_button_only_for_merged_pairs_with_backups(client, monkeypatch):
@@ -264,11 +298,14 @@ def test_pair_actions_update_the_row_in_place(client, monkeypatch):
     m.store.upsert_detected(1, 2, "Run A", "Zwift A", "2026-11-20T12:00:00+00:00", 0.97)
     monkeypatch.setattr(m.service, "simulate", lambda tid: None)
     r = c.post("/zwift/pairs/1/simulate", headers={"HX-Request": "true"})
-    assert r.status_code == 200 and r.text.lstrip().startswith("<tr")
+    assert r.status_code == 200 and r.text.lstrip().startswith('<div class="card hist-card src-zwift"')
     assert 'id="pair-1"' in r.text and 'hx-get="/zwift/pairs/1/row"' in r.text  # running: refreshes itself
     m.store.set_status(1, "simulated", "ok")
     row = c.get("/zwift/pairs/1/row").text
     assert "hx-trigger" not in row.split(">")[0] and "Simulated, ready to merge" in row
+    # The same four buttons as every card: Garmin, Re-sync (Merge here), Restore (not yet), FIT
+    assert "connect.garmin.com/modern/activity/1" in row and "/zwift/pairs/1/merge" in row
+    assert "/zwift/pairs/1/merged.fit" in row and 'title="Only a merged pair with its backups can be restored"' in row
     assert 'datetime="2026-11-20T12:00:00+00:00"' in row  # shown in local time by the page
     assert c.post("/zwift/pairs/1/ignore", follow_redirects=False).status_code == 303  # without HTMX
 
@@ -318,13 +355,14 @@ def test_zwift_account_is_connected_from_settings(client, monkeypatch):
     assert 'form="zwift-logout"' in c.get("/settings").text
 
 
-def test_sync_now_runs_a_full_pass_in_the_background(client, monkeypatch):
+def test_check_now_scans_the_whole_history_in_the_background(client, monkeypatch):
     c, m = client
     done = threading.Event()
-    monkeypatch.setattr(m, "run_scan", lambda: done.set() or True)
-    r = c.post("/zwift/sync-now", headers={"HX-Request": "true"})
-    assert r.status_code == 200 and "Zwift sync started" in r.headers["HX-Trigger"]
+    monkeypatch.setattr(m, "run_scan", lambda full=False: done.set() or full)
+    r = c.post("/zwift/check", headers={"HX-Request": "true"})
+    assert r.status_code == 200 and "Checking your whole history" in r.headers["HX-Trigger"]
     assert done.wait(2)
+    assert c.post("/zwift/sync-now", headers={"HX-Request": "true"}).status_code == 200  # the old button
     monkeypatch.setattr(m.garmin, "has_tokens", lambda: False)
-    assert c.post("/zwift/sync-now", headers={"HX-Request": "true"}).status_code == 409
-    assert "/zwift/sync-now" in c.get("/").text
+    assert c.post("/zwift/check", headers={"HX-Request": "true"}).status_code == 409
+    assert 'hx-post="/zwift/check"' in c.get("/").text

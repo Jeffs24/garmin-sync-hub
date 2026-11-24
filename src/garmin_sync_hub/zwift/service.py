@@ -38,8 +38,10 @@ class Service:
 
     # --- scan -------------------------------------------------------------
 
-    def scan(self) -> int:
-        activities = self.garmin.activities(self.cfg.scan_days)
+    def scan(self, days: int | None = None) -> int:
+        """Find new pairs over the last ``days`` (default: the period of the automatic check).
+        Nothing changes on Garmin: pairs show up as not synced."""
+        activities = self.garmin.activities(days or self.cfg.scan_days)
         pairs = find_pairs(activities, source_names=self.cfg.source_names,
                            min_overlap=self.cfg.min_overlap,
                            exclude_ids=self.store.handled_ids())

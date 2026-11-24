@@ -35,17 +35,27 @@ To update: `docker compose pull && docker compose up -d`. The image `:1` follows
 
 Set `HUB_PASSWORD` in `.env` to protect the web UI with a password if it can be reached from outside your network.
 
+## How every source works
+
+Each source page (Liftosaur, Zwift, Dogs, Backup) has the same layout: a top card with **Check now**, **Sync all (N)** and the **Auto-scan** and **Auto-sync** switches, then the history as cards with tabs (All, Not synced, Synced, Failed…). Options and **How it works** are in **Settings**, one tab per source. Backup has nothing to choose, so it has one button, **Back up now**, and lists its runs.
+
+- **Auto-scan** (with its interval) finds what is new and adds it to the app: a new workout, pair or activity missing its dog shows up as a **Not synced** card. Nothing changes on Garmin. An automatic scan looks back to the last scan that worked, with 3 days of margin (a watch synced late, a Zwift copy that reaches Garmin after the session); the first one, and **Check now**, look through your whole history.
+- **Auto-sync** sends what a scan finds (automatic or **Check now**) to Garmin, without a click. Off, it waits in **Not synced** for **Sync** on its card, or **Sync all**.
+- Scan on and sync off: you see what is new and sync it yourself. Both on: everything happens on its own. Scan off: nothing runs in the background, **Check now** when you want. Both switches are on the source page and in Settings.
+
+Every card has the same four buttons, greyed out with the reason when they do not apply: **Garmin** (open the activity), **Re-sync**, **Restore** and **FIT** (download the file).
+
 ## Liftosaur → Garmin
 
-**Liftosaur → Workouts** lists your Liftosaur workouts; sync them one by one or all at once (**Sync now**, also on the Overview). Auto-sync runs on a schedule you choose on the same page. A **How it works** card at the bottom shows what is sent to Garmin, with your current settings.
+**Liftosaur → Workouts** lists your Liftosaur workouts. A scan reads Liftosaur again, and the page also reads it again after a few minutes, so a new workout shows up as not synced even with auto-sync off. **Settings → Liftosaur** has a **How it works** card that shows what is sent to Garmin, with your current settings. For a workout:
 
-A synced workout has three actions:
-
-- **Undo** (workouts uploaded as a new activity only): deletes the Garmin activity this app created and makes the workout pending again. A watch activity that was updated with your sets is never deleted.
-- **Re-sync** (after an edit in Liftosaur): uploads the workout again. An uploaded activity is replaced; an updated watch activity gets its sets written again.
+- **Garmin**: the Garmin activity of a synced workout.
+- **Re-sync** (after an edit in Liftosaur): uploads the workout again. An uploaded activity is replaced; an updated watch activity gets its sets written again. On a workout not synced yet, the button is **Sync**.
+- **Restore**: puts Garmin back as it was before the sync, and makes the workout not synced again. An activity uploaded by this app is deleted. A watch activity gets back the sets, name and description it had before its first sync (saved in `data/liftosaur_originals/`, for syncs made since 1.6). A watch activity is never deleted.
+- **FIT**: the file this app makes from the workout.
 - **Unsync**: forgets the sync without touching Garmin.
 
-- **Mappings**: Liftosaur exercises are mapped to Garmin's exercise categories. Unmapped exercises show as "Unknown" on Garmin; map them from **Liftosaur → Mappings**, where each mapping shows the exact Garmin exercise (there is no generic one: sub-id 0 is the first exercise of the category).
+- **Mappings**: Liftosaur exercises are mapped to Garmin's exercise categories. Unmapped exercises show as "Unknown" on Garmin; map them from **Settings → Liftosaur → Edit mappings**, where each mapping shows the exact Garmin exercise (there is no generic one: sub-id 0 is the first exercise of the category).
 - **Heart rate**: Liftosaur records none, so an uploaded workout has no heart rate and its calories are estimated at 90 bpm from your profile. With **Update existing activities**, the strength activity your watch recorded keeps its heart rate and gets your sets. **Heart Rate Data** in Settings draws the watch's all-day heart rate on each workout in Workouts; it is not added to the file sent to Garmin.
 - **Update existing activities**: if your watch already recorded the strength session, the workout's exercises and sets are written into that activity instead of creating a new one.
 
@@ -60,17 +70,17 @@ For each pair of *watch activity without a map* + *Zwift activity with a map* th
 1. Both original FIT files are downloaded and backed up in `data/zwift_backups/<id>/`.
 2. The Zwift GPS position (and, optionally, altitude) is added to the watch FIT, point by point, by timestamp. Everything else in the watch file is kept byte for byte. The only other change is the file creation time, one second later, because Garmin refuses a file it has already seen, even after the activity was deleted. The device identity is untouched, so the activity still counts as a watch activity.
 3. The merged file is read back and validated.
-4. **Only when you ask** (Merge, Merge all, or **Merge automatically** in Settings → Zwift), the merged file is imported first; the original watch activity and the Zwift copy are deleted only once the merged activity is on Garmin. Name, description, type and gear are restored.
+4. **Only when you ask** (Merge, Sync all, or with **Auto-sync** on), the merged file is imported first; the original watch activity and the Zwift copy are deleted only once the merged activity is on Garmin. Name, description, type and gear are restored.
 
 Every Garmin step is checked against the activity list, since Garmin sometimes answers with an error (such as a 504) for a request that went through. If an earlier attempt left the watch activity deleted without a replacement, clicking **Merge** again imports it from the backups.
 
-**Zwift → Pairs** lists the pairs found, with a filter by status. Actions update the row in place, and a pair being merged refreshes itself until it is done. Its **Auto-sync** switch turns the scheduled scan on or off and sets how often it runs; the other Zwift options (merge mode, period scanned, matching thresholds) are in **Settings → Zwift** and apply right away. **Simulate** builds the merged file without touching Garmin, and **Preview** shows it as Garmin will get it: map, stats and charts. **Restore** undoes a merge from the backups: the original watch activity is re-imported first (name, description, type and gear restored), then the merged activity is deleted, and a Zwift copy removed by the merge is brought back. The restored pair stays out of automatic merges. A **How it works** card on the same page shows what the merge takes from each activity, with your current settings.
+**Zwift** lists the pairs found, with a filter by status. Auto-scan looks for pairs (and fetches the Zwift files) at its interval; with **Auto-sync** on, what it finds is merged too. Actions update the card in place, and a pair being merged refreshes itself until it is done. On a pair, **Re-sync** is **Merge** and **FIT** downloads the merged file. **Simulate** builds the merged file without touching Garmin; **Map and charts**, in the pair's card, shows it as Garmin will get it: map, stats and charts. **Restore** undoes a merge from the backups: the original watch activity is re-imported first (name, description, type and gear restored), then the merged activity is deleted, and a Zwift copy removed by the merge is brought back. The restored pair stays out of automatic merges. A **How it works** card in **Settings → Zwift** shows what the merge takes from each activity, with your current settings.
 
-### Zwift account and history
+### Zwift account and files
 
-Connect your Zwift account in **Settings → Zwift**, then click **Sync history** in **Zwift → History and files** from a date: the app lists your Zwift activities through Zwift's unofficial Companion API and downloads the FIT file of each one that overlaps a watch activity without a map. Once connected, new Zwift activities are also fetched at each scan. Only the Zwift tokens are stored, in `data/zwift_tokens.json`.
+Connect your Zwift account in **Settings → Zwift**: the app then lists your Zwift activities through Zwift's unofficial Companion API at each scan, and downloads the FIT file of each one that overlaps a watch activity without a map (**Check now** goes through your whole history). Only the Zwift tokens are stored, in `data/zwift_tokens.json`.
 
-Without a Zwift account, you can upload Zwift FIT files by hand: from zwift.com (activity → Download .fit) or from your Strava data export (`activities/` folder, `.fit.gz` accepted).
+Without a Zwift account, upload Zwift FIT files in **Settings → Zwift**: from zwift.com (activity → Download .fit) or from your Strava data export (`activities/` folder, `.fit.gz` accepted).
 
 Offline merge of two files: `garmin-sync-hub zwift-merge-files watch.fit zwift.fit -o merged.fit`.
 
@@ -80,8 +90,9 @@ Garmin Connect lets you add your dogs to an activity. **Dogs** does it for you, 
 
 1. On the **Dogs** page, click **Find my dogs**: it reads the dogs of your Garmin profile, with their names (add your dog in the Garmin Connect app first). If Garmin does not answer, it looks for their ids on your latest activities and in your backup instead; name those dogs in **Settings → Dogs**.
 2. In **Settings → Dogs**, add a rule: activity name *is* (or *contains*, *starts with*) "Dog Walk" → your dog. Case is ignored.
-3. **Preview past activities** lists every matching activity; **Add to N activities** updates them on Garmin Connect. Dogs already on an activity are kept, and nothing else in the activity changes.
-4. **Sync now** (here or on the Overview) checks your latest 100 activities; turn on **Auto-sync** to do it on a schedule. Each dog added, or failure, shows in **Activity**. The preview says how many activities it checked and how far back, and lists similar names that match no rule ("Dog walk with Milo").
+3. Auto-scan checks your new activities at its interval, and **Check now** your whole history: an activity the rules give a dog to, without that dog, shows up as **Not synced**. The check says how many activities it looked at and lists similar names that match no rule ("Dog walk with Milo").
+4. **Sync** on a card, or **Sync all**, adds the dogs; with **Auto-sync** on, it happens after each scan. Dogs already on an activity are kept, and nothing else in the activity changes. Each dog added, or failure, shows in **Activity**.
+5. **Restore** removes the dogs the app added (dogs that were already there stay), and automatic runs then leave that activity alone; **Re-sync** adds them back. **FIT** downloads the activity's original file, from the backup when it has it.
 
 This uses the same unofficial Garmin Connect API as the rest of the app: the profile's dogs (`gcx.garmin.com/family-api/profile-service/profile/pets`) and the activity's `hasDog` and `dogProfileIds`. Garmin's activity details only say `hasDog`, without the ids, which is why the dogs are read from the profile.
 
@@ -103,6 +114,8 @@ history/<name>/<year>.json           calendar, body composition, weigh-ins, bloo
 ```
 
 Health data covers the days since your first activity (or the date set in **Settings → Backup**, where it can also be turned off). The **Build zip** button makes one zip of everything to download.
+
+The **Backup** page shows what the backup holds, per category (activities by category and year, health days per metric, history years, account files, gear, workouts and courses), and each run as a card with what it added: the new activities (each with **Garmin** and **FIT**), health days, history files, gear, workouts and courses.
 
 **Google Drive, OneDrive, Dropbox, a NAS…**: after each backup, new files can be copied with [rclone](https://rclone.org) (included in the image). Set up the connection once:
 

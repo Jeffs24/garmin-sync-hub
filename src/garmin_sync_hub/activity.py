@@ -127,7 +127,7 @@ ZWIFT_STATES = {
     # status: (result, state)
     "merged": ("Map added", "ok"),
     "failed": ("Failed", "failed"),
-    "detected": ("Ready to merge", "pending"),
+    "detected": ("Not synced", "pending"),
     "simulated": ("Simulated, ready to merge", "pending"),
     "queued": ("Queued", "pending"),
     "running": ("Running…", "pending"),
@@ -178,13 +178,14 @@ def dogs_events(log: Iterable[dict], dog_name=lambda d: f"Dog {d}") -> list[Even
     events = []
     for row in log:
         ok = row.get("ok", True)
+        restored = ok and row.get("restored")
         names = ", ".join(dog_name(d) for d in row.get("dogs") or [])
         events.append(Event(
             source="dogs",
             when=_parse_time(row.get("at") or row.get("start")),
             title=row.get("name") or f"#{row.get('id')}",
-            result=f"{names} added" if ok else "Failed",
-            state="ok" if ok else "failed",
+            result=(f"{names} removed" if restored else f"{names} added") if ok else "Failed",
+            state=("muted" if restored else "ok") if ok else "failed",
             detail=(f"Activity of {str(row.get('start') or '')[:16].replace('T', ' ')}" if ok
                     else f"{names}: {row.get('error') or ''}".strip(": ")),
             garmin_id=str(row["id"]) if row.get("id") else None,

@@ -238,7 +238,8 @@ def test_backup_page_and_overview(hub, monkeypatch):
     monkeypatch.setattr(m.garmin, "has_tokens", lambda: True)
     page = c.get("/backup").text
     assert "No backup yet" in page and "Back up now" in page and 'id="bk-autosync-toggle"' in page
-    assert "What is saved" in page and "gear/" in page
+    assert "In the backup" in page and 'href="/settings#backup">How it works' in page
+    assert "gear/" in c.get("/settings").text  # what is saved: in Settings → Backup
     assert 'href="/backup" class="active"' in page
     overview = c.get("/").text
     assert "src-backup" in overview and "Back up now" in overview
@@ -256,6 +257,13 @@ def test_run_writes_state_and_counts(hub, monkeypatch):
     assert json.loads((m._state_path()).read_text())["counts"]["activities"] == 3
     page = c.get("/backup").text
     assert "3 activities saved" in page
+    run = m.state["runs"][0]
+    assert run["new"]["activities"] == 3 and len(run["added"]["activities"]) == 3
+    assert "Activities added (3)" in page and "/backup/activities/" in page  # what this run added, with its files
+    inv = m.state["inventory"]
+    assert inv["activities"]["total"] == 3 and inv["gear"] and "In the backup" in page
+    act = run["added"]["activities"][0]["id"]
+    assert c.get(f"/backup/activities/{act}/file").status_code in (200, 404)  # 404: activity entered by hand
 
 
 def test_run_without_garmin_is_refused(hub, monkeypatch):

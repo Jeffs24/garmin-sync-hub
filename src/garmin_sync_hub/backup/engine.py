@@ -51,6 +51,7 @@ PAUSE_S = 0.4                     # between two Garmin requests
 RATE_LIMIT_WAITS = (60, 180)      # seconds to wait after a 429 before giving up for this run
 REFRESH_DAYS = 2                  # health days fetched again at each run (Garmin completes them later)
 PAGE = 100
+ADDED_KEPT = 200                  # items listed per category for one run (the count is always exact)
 
 # Daily health data: folder name -> request for one day.
 HEALTH_METRICS: dict[str, Callable[[Garmin, str], Any]] = {
@@ -174,6 +175,14 @@ class Progress:
     message: str = ""
     counts: dict[str, int] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    # What this run added, per category, for the Backup page (activities are dicts, the rest names).
+    added: dict[str, list[Any]] = field(default_factory=dict)
+
+    def add(self, kind: str, item: Any) -> None:
+        self.counts[f"{kind}_new"] = self.counts.get(f"{kind}_new", 0) + 1
+        items = self.added.setdefault(kind, [])
+        if len(items) < ADDED_KEPT:
+            items.append(item)
 
     def warn(self, text: str) -> None:
         log.warning("Backup: %s", text)
@@ -262,11 +271,24 @@ class PacedGarmin:
                     raise InterruptedError from None
         raise AssertionError("unreachable")
 
-    def list_activities(self, max_pages: int | None = None) -> list[dict]:
-        """Activity summaries, newest first (all of them, or the first pages)."""
+    def list_activities(self, max_pages: int | None = None, since: str | None = None) -> list[dict]:
+        """Activity summaries, newest first (all of them, the first pages, or back to `since`,
+        a local date or date-time like "2026-11-20")."""
+        if since:
+            older = lambda a: str(a.get("startTimeLocal") or "")[:len(since)] < since  # noqa: E731
+            listed: list[dict] = []
+            for a in self._pages(max_pages):
+                if older(a):
+                    break
+                listed.append(a)
+            return listed
+        return list(self._pages(max_pages))
+
+    def _pages(self, max_pages: int | None = None):
+        """Activity summaries, newest first, read one page at a time."""
         # Garmin may return fewer than PAGE activities per page: only an empty page means the
         # end of the history (stopping at a short page used to miss every older activity).
-        activities: list[dict] = []
+        count = 0
         seen: set = set()
         start, pages = 0, 0
         while True:
@@ -275,12 +297,13 @@ class PacedGarmin:
             new = [a for a in page if isinstance(a, dict) and a.get("activityId")
                    and a["activityId"] not in seen]
             if not new:
-                return activities  # end of the history (or Garmin repeating itself)
+                return  # end of the history (or Garmin repeating itself)
             seen.update(a["activityId"] for a in new)
-            activities.extend(new)
-            self.p.message = f"{len(activities)} activities listed"
+            count += len(new)
+            self.p.message = f"{count} activities listed"
+            yield from new
             if max_pages and pages >= max_pages:
-                return activities
+                return
             start += len(page)
 
 
@@ -366,11 +389,14 @@ class Backup(PacedGarmin):
             start = max(date(year, 1, 1), since).isoformat()
             end = min(date(year, 12, 31), self.today).isoformat()
             try:
+                existed = self.history_path(name, year).exists()
                 if name == "calendar":
                     value = self.call(self.g.get_calendar_year, year)
                 else:
                     value = self.call(HISTORY_RANGES[name], self.g, start, end)
                 write_json(self.history_path(name, year), value)
+                if not existed:
+                    self.p.add("history", f"{name.replace('_', ' ')} {year}")
             except (InterruptedError, StopBackup):
                 raise
             except Exception as e:  # noqa: BLE001
@@ -406,6 +432,8 @@ class Backup(PacedGarmin):
                 continue
             name = item.get("displayName") or item.get("customMakeModel") or item.get("gearMakeName") or "gear"
             folder = self.root / "gear" / f"{slug(name)}_{str(uuid).replace('-', '')[:8]}"
+            if not folder.exists():
+                self.p.add("gear", name)
             for part, fetch in (("details", self.g.get_gear_details), ("stats", self.g.get_gear_stats),
                                 ("activities", self.g.get_gear_activities)):
                 try:
@@ -521,7 +549,9 @@ class Backup(PacedGarmin):
         for a in reversed(todo):  # oldest first: an interrupted run leaves no gap in recent ones
             try:
                 self.save_activity(a)
-                self.p.counts["activities_new"] = self.p.counts.get("activities_new", 0) + 1
+                self.p.add("activities", {
+                    "id": a["activityId"], "name": a.get("activityName") or "", "start": str(a.get("startTimeLocal") or "")[:16],
+                    "type": (a.get("activityType") or {}).get("typeKey") or ""})
             except (InterruptedError, StopBackup):
                 raise
             except Exception as e:  # noqa: BLE001
@@ -586,6 +616,7 @@ class Backup(PacedGarmin):
             if wid and not path.exists():
                 try:
                     write_atomic(path, self.call(self.g.download_workout, wid))
+                    self.p.add("workouts", w.get("workoutName") or str(wid))
                 except (InterruptedError, StopBackup):
                     raise
                 except Exception as e:  # noqa: BLE001
@@ -611,6 +642,8 @@ class Backup(PacedGarmin):
                 if cid and not path.exists():
                     try:
                         write_atomic(path, self.call(self.g.download_course, cid, fmt=fmt))
+                        if fmt == "fit":
+                            self.p.add("courses", c.get("courseName") or str(cid))
                     except (InterruptedError, StopBackup):
                         raise
                     except Exception as e:  # noqa: BLE001
@@ -632,10 +665,11 @@ class Backup(PacedGarmin):
         self._phase("health", len(todo))
         for day, metric in todo:
             try:
+                existed = self.health_path(metric, day).exists()
                 value = self.call(HEALTH_METRICS[metric], self.g, day.isoformat())
                 write_json(self.health_path(metric, day), value)
-                if metric == "daily_summary":
-                    self.p.counts["health_days_new"] = self.p.counts.get("health_days_new", 0) + 1
+                if metric == "daily_summary" and not existed:  # a day fetched again is not new
+                    self.p.add("health_days", day.isoformat())
             except (InterruptedError, StopBackup):
                 raise
             except Exception as e:  # noqa: BLE001
@@ -659,6 +693,50 @@ class Backup(PacedGarmin):
         writer.writerows(rows)
         write_atomic(self.root / "health" / "daily_summary.csv", out.getvalue())
         self.p.counts["health_days"] = len(rows)
+
+
+def find_activity_file(root: Path, activity_id: int | str) -> Path | None:
+    """The original file (.fit, or .tcx/.gpx) of an activity in the backup, if it was saved."""
+    for path in (root / "activities").glob(f"*/*/*_{activity_id}.*"):
+        if path.suffix.lower() in (".fit", ".tcx", ".gpx") and _ID_AT_END.search(path.stem):
+            return path
+    return None
+
+
+def inventory(root: Path) -> dict[str, Any]:
+    """What the backup folder holds, per category, for the Backup page (files on disk, no request)."""
+    def size(paths) -> int:
+        return sum(p.stat().st_size for p in paths if p.is_file())
+
+    acts = root / "activities"
+    by_category: dict[str, int] = {}
+    by_year: dict[str, int] = {}
+    with_file = 0
+    for path in acts.glob("*/*/*.json"):
+        by_category[path.parent.parent.name] = by_category.get(path.parent.parent.name, 0) + 1
+        by_year[path.parent.name] = by_year.get(path.parent.name, 0) + 1
+        if any(path.with_suffix(ext).exists() for ext in (".fit", ".tcx", ".gpx")):
+            with_file += 1
+    days = sorted(p.stem for p in (root / "health" / "daily_summary").glob("*/*.json"))
+    metrics = {d.name: sum(1 for _ in d.glob("*/*.json")) for d in sorted((root / "health").glob("*")) if d.is_dir()}
+    history = {d.name: sorted(p.stem for p in d.glob("*.json")) for d in sorted((root / "history").glob("*")) if d.is_dir()}
+    gear = [d for d in (root / "gear").glob("*") if d.is_dir()]
+    return {
+        "at": now().isoformat(timespec="seconds"),
+        "activities": {"total": sum(by_category.values()), "with_file": with_file,
+                       "by_category": dict(sorted(by_category.items(), key=lambda kv: -kv[1])),
+                       "by_year": dict(sorted(by_year.items(), reverse=True)),
+                       "size": size(acts.rglob("*")) if acts.exists() else 0},
+        "health": {"days": len(days), "first": days[0] if days else None, "last": days[-1] if days else None,
+                   "metrics": metrics, "size": size((root / "health").rglob("*")) if (root / "health").exists() else 0},
+        "history": history,
+        "account": sorted(p.stem for p in (root / "account").glob("*.json")),
+        "devices": sorted(p.stem for p in (root / "account" / "devices").glob("*.json")),
+        "gear": sorted(d.name.rsplit("_", 1)[0].replace("-", " ") for d in gear),
+        "workouts": len(list((root / "workouts").glob("*.fit"))),
+        "courses": len(list((root / "courses").glob("*.fit"))),
+        "size": folder_size(root) if root.exists() else 0,
+    }
 
 
 def folder_size(root: Path) -> int:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import tempfile
@@ -22,6 +23,7 @@ from garmin_sync_hub.garmin import (
     update_exercise_sets,
     upload_fit,
 )
+from garmin_sync_hub.liftosaur import originals
 from garmin_sync_hub.liftosaur.liftosaur import LiftosaurClient
 from garmin_sync_hub.liftosaur.mapper import lookup_exercise
 
@@ -331,6 +333,7 @@ def update_existing_activity_sets(garmin_client, activity_id: int, workout: dict
     if not garmin_sets:
         logger.info("  No exercise sets found on Garmin activity %s", activity_id)
         return False
+    originals.save_once(garmin_client, activity_id, copy.deepcopy(garmin_sets))  # for Restore
 
     # Remove false-detection sets (0 reps)
     garmin_sets = _remove_zero_rep_sets(garmin_sets, workout)
@@ -523,21 +526,18 @@ def sync(
                     upload_result = upload_fit(garmin_client, fit_path, workout_start=start_time)
                     activity_id = upload_result.get("activity_id")
 
+                # A watch activity keeps the calories and heart rate the watch measured: no estimate.
+                estimate = {} if existing_id else {"calories": result.get("calories"), "avg_hr": result.get("avg_hr")}
                 if activity_id:
                     rename_activity(garmin_client, activity_id, title)
-                    desc = generate_description(
-                        workout,
-                        calories=result.get("calories"),
-                        avg_hr=result.get("avg_hr"),
-                    )
-                    set_description(garmin_client, activity_id, desc)
+                    set_description(garmin_client, activity_id, generate_description(workout, **estimate))
 
                 db.mark_synced(
                     workout_id=wid,
                     garmin_activity_id=str(activity_id) if activity_id else None,
                     title=title,
-                    calories=result.get("calories"),
-                    avg_hr=result.get("avg_hr"),
+                    calories=estimate.get("calories"),
+                    avg_hr=estimate.get("avg_hr"),
                     source_updated_at=workout.get("updated_at"),
                     action="updated" if existing_id else "uploaded",
                 )

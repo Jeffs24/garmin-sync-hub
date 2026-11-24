@@ -9,7 +9,7 @@
 </div>
 
 {% set any_running = zwift.syncing or dogs.running or backup.running %}
-{# Cards reload after a Sync now click, then every 3 s while a sync runs. #}
+{# Cards reload after a Check now or Sync all click, then every 3 s while a sync runs. #}
 <div class="source-grid" id="source-grid" hx-get="/" hx-select="#source-grid" hx-swap="outerHTML"
      hx-trigger="refresh{{ ", every 3s" if any_running }}">
     {# Garmin: the destination of every sync #}
@@ -20,15 +20,15 @@
         <div class="source-name">Liftosaur</div>
         {% if lift.configured %}
         <div class="source-main">
-            {{ lift.synced }} synced{% if lift.pending %} · <span class="state-pending"><span id="stat-pending">{{ lift.pending }}</span> pending</span>{% endif %}
+            {{ lift.synced }} synced{% if lift.pending %} · <span class="state-pending"><span id="stat-pending">{{ lift.pending }}</span> not synced</span>{% endif %}
         </div>
         <div class="source-meta">
             {% if lift.last_run %}Last sync <time data-local data-time datetime="{{ lift.last_run.time|replace(' ', 'T') }}Z"></time> · {% endif %}
             {% if lift.failed %}<a href="/activity?source=attention" class="state-failed">{{ lift.failed }} failed</a> · {% endif %}
-            {% if lift.auto_sync.enabled %}Auto-sync every {{ lift.auto_sync.interval_minutes|interval_label }}{% if lift.auto_sync.next_at %} · next <time data-local data-time datetime="{{ lift.auto_sync.next_at.isoformat() }}"></time>{% endif %}{% else %}Auto-sync off{% endif %}
+            {{ ui.scan_sync_meta(lift.auto_sync.scan, lift.auto_sync.interval_minutes, lift.auto_sync.next_at, lift.auto_sync.enabled) }}
         </div>
         <div class="source-actions">
-            <button id="sync-now-btn" class="btn btn-primary btn-sm" onclick="syncNow()" {% if not garmin_connected %}title="Connect Garmin first"{% endif %}>Sync now</button>
+            <button id="sync-now-btn" class="btn btn-primary btn-sm" onclick="syncNow()" {% if not garmin_connected %}title="Connect Garmin first"{% endif %}{% if not lift.pending %} disabled{% endif %}>Sync all ({{ lift.pending }})</button>
             <a href="/liftosaur/workouts" class="btn btn-secondary btn-sm">Workouts</a>
         </div>
         <div id="sync-progress" style="display: none; font-size: 12px; color: var(--text-secondary);">
@@ -47,22 +47,21 @@
     <div class="card source-card src-zwift">
         <div class="source-name">Zwift</div>
         <div class="source-main">
-            {{ zwift.merged }} map{{ '' if zwift.merged == 1 else 's' }} added{% if zwift.waiting %} · <span class="state-pending">{{ zwift.waiting }} ready</span>{% endif %}
+            {{ zwift.merged }} map{{ '' if zwift.merged == 1 else 's' }} added{% if zwift.waiting %} · <span class="state-pending">{{ zwift.waiting }} not synced</span>{% endif %}
         </div>
         <div class="source-meta">
             {% if zwift.last_scan %}Last sync <time data-local data-time datetime="{{ zwift.last_scan.isoformat() }}"></time> · {% endif %}
             {% if zwift.failed %}<a href="/activity?source=attention" class="state-failed">{{ zwift.failed }} failed</a> · {% endif %}
             {% if zwift.busy %}<span class="state-pending">{{ zwift.busy }} in progress</span> · {% endif %}
-            {% if zwift.auto_scan %}Auto-sync every {{ zwift.scan_interval_minutes|interval_label }}{% if zwift.next_scan %} · next <time data-local data-time datetime="{{ zwift.next_scan.isoformat() }}"></time>{% endif %}{% else %}Auto-sync off{% endif %}
-            · {{ 'automatic merge' if zwift.auto_merge else 'merge on demand' }}
+            {{ ui.scan_sync_meta(zwift.auto_scan, zwift.scan_interval_minutes, zwift.next_scan, zwift.auto_merge) }}
             · Zwift account {{ 'connected' if zwift.zwift_connected else 'not connected' }}
         </div>
         {% if zwift.last_error %}<div class="source-meta state-failed">Last sync: {{ zwift.last_error }}</div>{% endif %}
         <div class="source-actions">
-            <button class="btn btn-primary btn-sm" hx-post="/zwift/sync-now" hx-swap="none" hx-disabled-elt="this" hx-on::after-request="htmx.trigger('#source-grid', 'refresh')"
-                    {% if not garmin_connected or zwift.syncing %}disabled{% endif %}>{% if zwift.syncing %}Syncing…{% else %}Sync now{% endif %}</button>
+            <button class="btn btn-secondary btn-sm" hx-post="/zwift/check" hx-swap="none" title="Look for pairs over your whole history. Nothing changes on Garmin." hx-disabled-elt="this" hx-on::after-request="htmx.trigger('#source-grid', 'refresh')"
+                    {% if not garmin_connected or zwift.syncing %}disabled{% endif %}>{% if zwift.syncing %}Checking…{% else %}Check now{% endif %}</button>
             {% if zwift.waiting %}
-            <a href="/zwift" class="btn btn-secondary btn-sm">Review {{ zwift.waiting }} pair{{ '' if zwift.waiting == 1 else 's' }}</a>
+            <a href="/zwift?status=waiting" class="btn btn-primary btn-sm">Review {{ zwift.waiting }} pair{{ '' if zwift.waiting == 1 else 's' }}</a>
             {% else %}
             <a href="/zwift" class="btn btn-secondary btn-sm">Pairs</a>
             {% endif %}
@@ -74,20 +73,20 @@
     <div class="card source-card src-dogs">
         <div class="source-name">Dogs</div>
         <div class="source-main {% if not dogs.dogs %}state-pending{% endif %}">
-            {% if dogs.running %}Adding dogs…{% elif dogs.dogs %}{{ dogs.tagged }} activit{{ 'y' if dogs.tagged == 1 else 'ies' }} with a dog{% else %}No dog yet{% endif %}
+            {% if dogs.running %}Working…{% elif dogs.dogs %}{{ dogs.tagged }} activit{{ 'y' if dogs.tagged == 1 else 'ies' }} with a dog{% if dogs.pending %} · <span class="state-pending">{{ dogs.pending }} not synced</span>{% endif %}{% else %}No dog yet{% endif %}
         </div>
         <div class="source-meta">
             {% if dogs.last_run %}Last sync <time data-local data-time datetime="{{ dogs.last_run.isoformat() }}"></time> · {% endif %}
             {% if dogs.failed %}<a href="/activity?source=attention" class="state-failed">{{ dogs.failed }} failed</a> · {% endif %}
             {% if dogs.dogs %}{{ dogs.dog_names|join(', ') }} · {{ dogs.rules }} rule{{ '' if dogs.rules == 1 else 's' }} · {% endif %}
-            {% if dogs.auto %}Auto-sync every {{ dogs.interval_minutes|interval_label }}{% if dogs.next_run %} · next <time data-local data-time datetime="{{ dogs.next_run.isoformat() }}"></time>{% endif %}{% else %}Auto-sync off{% endif %}
+            {{ ui.scan_sync_meta(dogs.scan, dogs.interval_minutes, dogs.next_run, dogs.auto) }}
         </div>
         {% if dogs.last_error %}<div class="source-meta state-failed">Last run: {{ dogs.last_error }}</div>{% endif %}
         <div class="source-actions">
             {% if dogs.rules %}
-            <button class="btn btn-primary btn-sm" hx-post="/dogs/run/auto" hx-swap="none" hx-disabled-elt="this" hx-on::after-request="htmx.trigger('#source-grid', 'refresh')"
-                    {% if not garmin_connected or dogs.running %}disabled{% endif %}>{% if dogs.running %}Syncing…{% else %}Sync now{% endif %}</button>
-            <a href="/dogs" class="btn btn-secondary btn-sm">Dogs</a>
+            <button class="btn btn-secondary btn-sm" hx-post="/dogs/run/check" hx-swap="none" title="Look through your whole history for activities missing their dog. Nothing changes on Garmin." hx-disabled-elt="this" hx-on::after-request="htmx.trigger('#source-grid', 'refresh')"
+                    {% if not garmin_connected or dogs.running %}disabled{% endif %}>{% if dogs.running %}Working…{% else %}Check now{% endif %}</button>
+            <a href="/dogs{{ '?status=pending' if dogs.pending }}" class="btn {{ 'btn-primary' if dogs.pending else 'btn-secondary' }} btn-sm">{% if dogs.pending %}Review {{ dogs.pending }}{% else %}Dogs{% endif %}</a>
             {% else %}
             <a href="/dogs" class="btn btn-primary btn-sm">Set up dogs</a>
             {% endif %}

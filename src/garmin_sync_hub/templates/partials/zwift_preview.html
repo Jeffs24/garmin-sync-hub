@@ -1,0 +1,29 @@
+{# Map, stats and charts of a pair's merged file, loaded into its card when "Map and charts" is opened
+   (like the heart rate timeline of a Liftosaur workout). Needs `row`, `has_file`, `pv`, `charts`, `delete_source`. #}
+{% if not has_file %}
+<p class="hist-note">No merged file yet: click <b>Simulate</b> first.</p>
+{% else %}
+<p class="hist-note" style="margin-top: 0;">
+    {% if row.status == 'merged' %}This is the activity now on Garmin (#{{ row.new_id }}).
+    {% else %}Nothing has changed on Garmin yet. <b>Merge</b> imports this file, then deletes the watch activity #{{ row.target_id }}{% if row.source_id and delete_source %} and the Zwift copy #{{ row.source_id }}{% endif %}, and restores the name “{{ row.target_name }}”, description, type and gear.{% endif %}
+</p>
+<div id="zw-map-{{ row.target_id }}" class="zw-map"></div>
+<p class="hist-note">Zwift worlds are placed on real coordinates (Watopia is in the Solomon Islands), so the track is drawn over that real place, as Garmin will show it.</p>
+{% if pv.stats %}<div class="zw-stats">
+    {% for k, v in pv.stats.items() %}<div class="zw-stat"><span>{{ k }}</span><b>{{ v }}</b></div>{% endfor %}
+</div>{% endif %}
+<div style="margin-top: 12px;">{% for chart in charts %}{{ chart|safe }}{% else %}<p class="hist-note">No data series.</p>{% endfor %}</div>
+<script>
+(function () {
+    const el = document.getElementById('zw-map-{{ row.target_id }}');
+    const track = {{ pv.track|tojson }};
+    if (!track.length || !window.L) { el.innerHTML = '<p class="hist-note">No GPS track.</p>'; el.style.height = 'auto'; return; }
+    const map = L.map(el, {scrollWheelZoom: false});
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'}).addTo(map);
+    const line = L.polyline(track, {color: '#10b981', weight: 4}).addTo(map);
+    L.circleMarker(track[0], {radius: 6, color: '#3b82f6', fillOpacity: 1}).addTo(map);
+    L.circleMarker(track[track.length - 1], {radius: 6, color: '#ef4444', fillOpacity: 1}).addTo(map);
+    map.fitBounds(line.getBounds(), {padding: [20, 20]});
+})();
+</script>
+{% endif %}

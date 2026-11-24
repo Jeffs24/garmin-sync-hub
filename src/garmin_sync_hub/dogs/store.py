@@ -34,9 +34,15 @@ class Rule:
 class DogsState:
     dogs: dict[str, str] = field(default_factory=dict)       # dog profile id -> name given here
     rules: list[Rule] = field(default_factory=list)
-    auto: bool = False
+    scan: bool = True     # auto-scan: look for activities missing their dog every interval_minutes
+    auto: bool = False    # auto-sync: add the dogs a scan finds without a click
     interval_minutes: int = 60
     tagged: dict[str, list[int]] = field(default_factory=dict)  # activity id -> dogs set by us
+    restored: list[int] = field(default_factory=list)  # activities whose dogs Restore removed: never re-added on its own
+    # Activities the rules give a dog to that do not have it yet ("not synced"), newest first:
+    # {id, name, start, dogs}. Found by every check, even with auto-sync off.
+    pending: list[dict[str, Any]] = field(default_factory=list)
+    last_check: str | None = None
     # Dogs added and failures, newest first: {id, name, start, dogs, at, ok, error}
     recent: list[dict[str, Any]] = field(default_factory=list)
     last_run: str | None = None
@@ -117,6 +123,15 @@ class DogsStore:
             if not 0 <= index < len(self.state.rules):
                 raise ValueError("Unknown rule")
             del self.state.rules[index]
+            self.save()
+
+    def set_scan(self, enabled: bool, interval: int | None = None) -> None:
+        with self._lock:
+            self.state.scan = enabled
+            if interval is not None:
+                if interval not in DOG_INTERVALS:
+                    raise ValueError("Unknown interval")
+                self.state.interval_minutes = interval
             self.save()
 
     def set_auto(self, enabled: bool, interval: int | None = None) -> None:

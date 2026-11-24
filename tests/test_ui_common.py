@@ -22,23 +22,40 @@ def test_interval_labels():
         "15 min", "1 hour", "90 min", "2 hours", "24 hours"]
 
 
-def test_autosync_line_is_the_same_for_both_sources():
+def test_autoscan_line_is_the_same_for_every_source():
     last = datetime(2026, 11, 22, 10, tzinfo=timezone.utc)
-    on = server.liftosaur_autosync_line({"enabled": True, "last_at": last, "next_at": None})
+    on = server.liftosaur_autosync_line({"scan": True, "last_at": last, "next_at": None})
     assert 'datetime="2026-11-22T10:00:00Z"' in on and on.startswith("Last:")
-    off = server.liftosaur_autosync_line({"enabled": False})
-    assert off.startswith("Off:") and "Sync now" in off
+    off = server.liftosaur_autosync_line({"scan": False})
+    assert off.startswith("Off:") and "Check now" in off
+    assert templating.sync_line(True).startswith("On:") and "Not synced" in templating.sync_line(False)
 
 
-def test_liftosaur_autosync_toggle_shows_next_run(client, monkeypatch):
+def test_liftosaur_autoscan_and_autosync_switches(client, monkeypatch):
     saved = {}
-    monkeypatch.setattr(server, "load_config", lambda: {"auto_sync": dict(saved)})
-    monkeypatch.setattr(server, "save_config", lambda cfg: saved.update(cfg["auto_sync"]))
-    r = client.post("/api/toggle-autosync", data={"enabled": "true", "interval": "60"})
+    monkeypatch.setattr(server, "load_config", lambda: json.loads(json.dumps(saved)))
+    monkeypatch.setattr(server, "save_config", lambda cfg: saved.update(json.loads(json.dumps(cfg))))
+    r = client.post("/api/toggle-autoscan", data={"enabled": "true", "interval": "60"})
     assert r.status_code == 200 and "Next:" in r.text and "<time" in r.text
-    r = client.post("/api/toggle-autosync", data={"enabled": "false", "interval": "60"})
-    assert r.text.startswith("Off:")
-    assert server._autosync_timer is None
+    assert saved["auto_scan"] == {"enabled": True, "interval_minutes": 60} and server._autosync_timer is not None
+    r = client.post("/api/toggle-autoscan", data={"enabled": "false", "interval": "60"})
+    assert r.text.startswith("Off:") and server._autosync_timer is None
+    r = client.post("/api/toggle-autosync", data={"enabled": "true"})
+    assert r.text.startswith("On:") and saved["auto_sync"]["enabled"] is True
+    assert saved["auto_scan"]["enabled"] is False  # the two switches are separate
+
+
+def test_old_liftosaur_auto_sync_keeps_working(tmp_path, monkeypatch):
+    """Before 1.6 one switch did both: scans keep its interval, auto-sync keeps its on/off."""
+    from garmin_sync_hub import config as cfgmod
+
+    path = tmp_path / "liftosaur.json"
+    monkeypatch.setattr(cfgmod, "CONFIG_FILE", path)
+    monkeypatch.setattr(cfgmod, "CONFIG_DIR", tmp_path)
+    path.write_text(json.dumps({"auto_sync": {"enabled": True, "interval_minutes": 60}}))
+    cfg = cfgmod.load_config()
+    assert cfg["auto_scan"] == {"enabled": True, "interval_minutes": 60} and cfg["auto_sync"]["enabled"] is True
+    assert json.loads(path.read_text())["auto_scan"]["interval_minutes"] == 60  # saved once
 
 
 def test_settings_save_shows_a_notice(client, monkeypatch):
@@ -75,6 +92,43 @@ def test_single_sync_failure_is_a_notice(client, monkeypatch):
     r = client.post("/api/sync/w-x", headers={"HX-Request": "true"})
     trigger = json.loads(r.headers["HX-Trigger"])
     assert "Liftosaur is down" in trigger["notify"]["message"] and r.headers["HX-Reswap"] == "none"
+
+
+def test_single_sync_refreshes_the_saved_workout(client, monkeypatch):
+    """A workout edited in Liftosaur shows its new values on the Workouts list after a re-sync."""
+    import garmin_sync_hub.garmin as garmin
+    import garmin_sync_hub.liftosaur.fit as fit
+    import garmin_sync_hub.liftosaur.liftosaur as liftosaur
+    import garmin_sync_hub.liftosaur.sync as lsync
+
+    def workout(weight):
+        return {"id": "w-x", "title": "Day 1", "start_time": "2026-11-24T13:30:18Z",
+                "exercises": [{"title": "Chest Dip", "sets": [{"reps": 10, "weight_kg": weight}]}]}
+
+    class FakeLiftosaur:
+        def __init__(self, *a, **kw):
+            pass
+
+        def get_workouts(self, page=1, page_size=10):
+            return {"workouts": [workout(0.0)], "page_count": 1}
+
+    monkeypatch.setattr(liftosaur, "LiftosaurClient", FakeLiftosaur)
+    monkeypatch.setattr(server, "load_config", lambda: {"liftosaur_api_key": "k"})
+    monkeypatch.setattr(garmin, "get_client", lambda *a, **kw: object())
+    monkeypatch.setattr(garmin, "find_activity_by_start_time", lambda *a, **kw: 42)
+    monkeypatch.setattr(garmin, "rename_activity", lambda *a, **kw: None)
+    monkeypatch.setattr(garmin, "set_description", lambda *a, **kw: None)
+    monkeypatch.setattr(fit, "generate_fit", lambda *a, **kw: {})
+    monkeypatch.setattr(lsync, "update_existing_activity_sets", lambda *a, **kw: True)
+    _db = db.get_db()
+    _db.set_app_config("workouts_page_1", {"workouts": [workout(66.6)], "page_count": 1})
+    try:
+        client.post("/api/sync/w-x", headers={"HX-Request": "true"})
+        saved = _db.get_app_config("workouts_page_1")["workouts"][0]
+        assert saved["exercises"][0]["sets"][0]["weight_kg"] == 0.0
+    finally:
+        _db.set_app_config("workouts_page_1", {})
+        db.unsync("w-x")
 
 
 class FakeGarmin:
@@ -159,14 +213,18 @@ def test_mappings_page_never_waits_for_liftosaur(client, monkeypatch):
         _db.set_app_config(server.UNMAPPED_CACHE_KEY, {})
 
 
-def test_workouts_page_explains_the_sync(client, monkeypatch):
+def test_settings_explain_each_sync(client, monkeypatch):
+    """How it works, with its drawing, is in Settings; the source pages link to it."""
     monkeypatch.setattr(server, "load_config", lambda: {
         "liftosaur_api_key": "", "user_profile": {}, "timing": {"working_set_seconds": 45},
         "update_existing": {"enabled": True, "match_window_minutes": 20}, "hr_fusion": {"enabled": True}})
     db.get_db().set_app_config("workouts_page_1", {"workouts": [], "page_count": 1})
+    settings = client.get("/settings").text
+    assert "How it works" in settings and "watch activity ±20 min" in settings and "45 s per set" in settings
+    assert "heart rate (display only)" in settings and "Update Sets" in settings
+    assert "watch data + GPS" in settings and "what is saved" in settings  # Zwift and Backup too
     page = client.get("/liftosaur/workouts").text
-    assert "How it works" in page and "watch activity ±20 min" in page and "45 s per set" in page
-    assert "heart rate (display only)" in page and "Update Sets" in page
+    assert 'href="/settings#liftosaur">How it works' in page and "card pipeline" not in page
 
 
 def test_old_zwift_env_values_are_imported_once(tmp_path, monkeypatch):
@@ -174,12 +232,12 @@ def test_old_zwift_env_values_are_imported_once(tmp_path, monkeypatch):
 
     monkeypatch.setattr(zcfg, "data_dir", lambda: tmp_path)
     monkeypatch.setenv("ZWIFT_AUTO_MERGE", "true")
-    monkeypatch.setenv("ZWIFT_SCAN_DAYS", "14")
+    monkeypatch.setenv("ZWIFT_SCAN_INTERVAL_MINUTES", "60")
     cfg = zcfg.Config.load()
-    assert cfg.auto_merge is True and cfg.scan_days == 14
-    assert json.loads((tmp_path / "zwift_settings.json").read_text())["scan_days"] == 14
-    monkeypatch.setenv("ZWIFT_SCAN_DAYS", "30")  # once saved, the file wins
-    assert zcfg.Config.load().scan_days == 14
+    assert cfg.auto_merge is True and cfg.scan_interval_minutes == 60
+    assert json.loads((tmp_path / "zwift_settings.json").read_text())["scan_interval_minutes"] == 60
+    monkeypatch.setenv("ZWIFT_SCAN_INTERVAL_MINUTES", "120")  # once saved, the file wins
+    assert zcfg.Config.load().scan_interval_minutes == 60
 
 
 def test_defaults_without_env_or_file(tmp_path, monkeypatch):
@@ -233,6 +291,137 @@ def test_resync_is_offered_on_every_synced_workout(client, monkeypatch):
         assert "resyncWorkout('rs-2', this, false)" in page  # writes the sets into the watch activity again
     finally:
         db.unsync("rs-1"), db.unsync("rs-2")
+        _db.set_app_config("workouts_page_1", {})
+
+
+def test_restore_puts_the_watch_activity_back(client, monkeypatch):
+    import garmin_sync_hub.garmin as garmin
+    from garmin_sync_hub.liftosaur import originals
+
+    class FakeClient:
+        def get_activity(self, aid):
+            return {"activityName": "Strength", "description": "from the watch"}
+
+    originals.save_once(FakeClient(), 55, [{"setType": "ACTIVE", "repetitionCount": 9}])
+    originals.save_once(FakeClient(), 55, [{"setType": "ACTIVE", "repetitionCount": 1}])  # kept once: the first
+    calls = []
+    monkeypatch.setattr(server, "load_config", lambda: {})
+    monkeypatch.setattr(garmin, "get_client", lambda *a, **kw: object())
+    monkeypatch.setattr(garmin, "update_exercise_sets", lambda c, aid, sets: calls.append(("sets", aid, sets)))
+    monkeypatch.setattr(garmin, "rename_activity", lambda c, aid, name: calls.append(("name", aid, name)))
+    monkeypatch.setattr(garmin, "set_description", lambda c, aid, text: calls.append(("description", aid, text)))
+    db.mark_synced("rest-1", "55", "Push", action="updated")
+    try:
+        r = client.post("/api/workouts/rest-1/restore",
+                        headers={"HX-Request": "true", "HX-Current-URL": "http://x/liftosaur/workouts"})
+        assert r.headers["HX-Redirect"] == "/liftosaur/workouts?saved=restored#workout-rest-1"
+        assert calls == [("sets", 55, [{"setType": "ACTIVE", "repetitionCount": 9}]), ("name", 55, "Strength"),
+                         ("description", 55, "from the watch")]
+        assert not db.is_synced("rest-1") and originals.load(55) is None
+    finally:
+        db.unsync("rest-1")
+        originals.forget(55)
+
+
+def test_restore_without_a_saved_original_is_a_notice(client, monkeypatch):
+    db.mark_synced("rest-2", "56", "Push", action="updated")
+    try:
+        r = client.post("/api/workouts/rest-2/restore", headers={"HX-Request": "true"})
+        assert "No copy of the watch activity" in json.loads(r.headers["HX-Trigger"])["notify"]["message"]
+        assert db.is_synced("rest-2")
+    finally:
+        db.unsync("rest-2")
+
+
+def test_workout_cards_have_the_four_buttons_and_filters(client, monkeypatch):
+    monkeypatch.setattr(server, "load_config", lambda: {"liftosaur_api_key": "", "user_profile": {}, "timing": {}})
+    workouts = [
+        {"id": "f-1", "title": "Push", "exercises": [], "start_time": "2026-11-20T10:00:00Z"},
+        {"id": "f-2", "title": "Pull", "exercises": [], "start_time": "2026-11-19T10:00:00Z"}]
+    _db = db.get_db()
+    _db.set_app_config("workouts_page_1", {"workouts": workouts, "page_count": 1})
+    _db.set_app_config(server.ALL_WORKOUTS_KEY, {"at": datetime.now(timezone.utc).isoformat(), "workouts": workouts})
+    db.mark_synced("f-1", "77", "Push", action="uploaded")
+    try:
+        page = client.get("/liftosaur/workouts").text
+        assert page.count('class="card hist-card src-liftosaur"') == 2
+        assert "connect.garmin.com/modern/activity/77" in page and "/api/workouts/f-1/restore" in page
+        assert "/api/workouts/f-2/fit" in page and 'hx-post="/api/sync/f-2"' in page
+        assert "opacity: 0.65" not in page  # synced cards are no longer faded
+        pending = client.get("/liftosaur/workouts?status=pending").text
+        assert "Pull" in pending and "/api/workouts/f-1/" not in pending
+        synced = client.get("/liftosaur/workouts?status=synced").text
+        assert "/api/workouts/f-1/restore" in synced and "/api/workouts/f-2/" not in synced
+    finally:
+        db.unsync("f-1")
+        _db.set_app_config("workouts_page_1", {})
+        _db.set_app_config(server.ALL_WORKOUTS_KEY, {})
+
+
+def test_calorie_estimate_only_for_workouts_not_written_into_a_watch_activity(client, monkeypatch):
+    monkeypatch.setattr(server, "load_config", lambda: {"liftosaur_api_key": "", "user_profile": {}, "timing": {}})
+    times = {"start_time": "2026-11-20T10:00:00Z", "end_time": "2026-11-20T10:40:00Z"}
+    _db = db.get_db()
+    _db.set_app_config("workouts_page_1", {"workouts": [
+        {"id": "cal-1", "title": "Watch", "exercises": [], **times},
+        {"id": "cal-2", "title": "Upload", "exercises": [], **times}], "page_count": 1})
+    db.mark_synced("cal-1", "81", "Watch", action="updated")
+    db.mark_synced("cal-2", "82", "Upload", action="uploaded")
+    try:
+        page = client.get("/liftosaur/workouts").text
+        watch, upload = page.split('id="workout-cal-1"')[1].split('id="workout-cal-2"')
+        assert "Calories:" not in watch  # the watch measured them
+        assert "Calories:" in upload
+    finally:
+        db.unsync("cal-1"), db.unsync("cal-2")
+        _db.set_app_config("workouts_page_1", {})
+
+
+def test_liftosaur_check_now_reads_liftosaur_again(client, monkeypatch):
+    """New workouts show up as not synced: Check now forgets the saved lists, and a saved page
+    older than a few minutes is read again (the saved one is kept when Liftosaur fails)."""
+    _db = db.get_db()
+    _db.set_app_config("workouts_page_1", {"workouts": [{"id": "old", "title": "Old", "exercises": []}], "page_count": 1})
+    _db.set_app_config("workout_total", {"count": 1})
+    r = client.post("/api/liftosaur/check", headers={"HX-Request": "true"})
+    assert r.headers["HX-Refresh"] == "true"
+    assert not _db.get_app_config("workouts_page_1") and not _db.get_app_config("workout_total")
+
+    class FakeLiftosaur:
+        calls = 0
+
+        def __init__(self, *a, **kw):
+            pass
+
+        def get_workouts(self, page=1, page_size=10):
+            FakeLiftosaur.calls += 1
+            return {"workouts": [{"id": "new", "title": "New one", "exercises": []}], "page_count": 1}
+
+        def get_workout_count(self):
+            return 1
+
+    import garmin_sync_hub.liftosaur.liftosaur as liftosaur
+    monkeypatch.setattr(liftosaur, "LiftosaurClient", FakeLiftosaur)
+    monkeypatch.setattr(server, "load_config", lambda: {"liftosaur_api_key": "k", "user_profile": {}, "timing": {}})
+    try:
+        assert "New one" in client.get("/liftosaur/workouts").text
+        assert "New one" in client.get("/liftosaur/workouts").text and FakeLiftosaur.calls == 1  # recent: saved page
+    finally:
+        _db.set_app_config("workouts_page_1", {})
+        _db.set_app_config("workout_total", {})
+
+
+def test_workout_fit_download(client, monkeypatch):
+    workout = {"id": "fit-1", "title": "Push", "start_time": "2026-11-20T10:00:00+00:00",
+               "end_time": "2026-11-20T10:30:00+00:00",
+               "exercises": [{"title": "Bench Press", "sets": [{"type": "normal", "reps": 5, "weight_kg": 60}]}]}
+    _db = db.get_db()
+    _db.set_app_config("workouts_page_1", {"workouts": [workout], "page_count": 1})
+    try:
+        r = client.get("/api/workouts/fit-1/fit")
+        assert r.status_code == 200 and len(r.content) > 100 and b".FIT" in r.content[:14]
+        assert r.headers["content-disposition"] == 'attachment; filename="2026-11-20_Push.fit"'
+    finally:
         _db.set_app_config("workouts_page_1", {})
 
 

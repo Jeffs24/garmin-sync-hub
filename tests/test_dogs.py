@@ -48,7 +48,9 @@ class FakeGarmin:
 
     def get_activity(self, activity_id):
         self.gets.append(activity_id)
-        return {"activityId": int(activity_id), "metadataDTO": dict(self.metadata[int(activity_id)])}
+        name = next(a["activityName"] for a in self.activities if a["activityId"] == int(activity_id))
+        return {"activityId": int(activity_id), "activityName": name,
+                "metadataDTO": dict(self.metadata[int(activity_id)])}
 
     def update_activity(self, activity_id, fields):
         self.puts.append((activity_id, fields))
@@ -201,6 +203,76 @@ def hub(tmp_path, monkeypatch):
         yield c, m
 
 
+def test_restore_removes_only_our_dogs_and_resync_adds_them_back(store):
+    from garmin_sync_hub.activity import dogs_events
+
+    g = FakeGarmin(n_walks=1)
+    g.metadata[100] = {"lapCount": 3, "hasDog": True, "dogProfileIds": [MILO]}  # Milo was there before
+    t = tagger(store, g)
+    t.run(full=True)
+    assert g.metadata[100]["dogProfileIds"] == [MILO, REX]
+
+    assert t.restore(100) == [REX]
+    assert g.metadata[100] == {"lapCount": 3, "hasDog": True, "dogProfileIds": [MILO]}
+    assert 100 in store.state.restored and store.state.recent[0]["restored"]
+    assert t.candidates(g.activities) == []  # automatic runs leave a restored activity alone
+    assert dogs_events(store.state.recent[:1], store.state.dog_name)[0].result == "Rex removed"
+    with pytest.raises(ValueError):
+        t.restore(100)  # nothing added since the restore
+
+    t.resync(100)
+    assert g.metadata[100]["dogProfileIds"] == [MILO, REX] and 100 not in store.state.restored
+
+
+def test_dogs_page_lists_activities_with_the_same_buttons(hub, monkeypatch):
+    c, m = hub
+    m.store.state.recent = [
+        {"id": 7, "name": "Dog Walk", "start": "2026-11-20T08:00", "dogs": [REX], "at": "2026-11-20T09:00:00+00:00", "ok": True},
+        {"id": 8, "name": "Long walk", "start": "2026-11-19T08:00", "dogs": [REX], "at": "2026-11-19T09:00:00+00:00",
+         "ok": False, "error": "Garmin said no"},
+        {"id": 7, "name": "Dog Walk", "start": "2026-11-20T08:00", "dogs": [REX], "at": "2026-11-18T09:00:00+00:00", "ok": True},
+    ]
+    try:
+        page = c.get("/dogs").text
+        assert page.count('class="card hist-card src-dogs"') == 2  # one card per activity
+        assert "/dogs/activities/7/restore" in page and "/dogs/activities/8/restore" not in page
+        assert "/dogs/activities/8/resync" in page and "/dogs/activities/7/fit" in page
+        assert "Garmin said no" in page
+        failed = c.get("/dogs?status=failed").text
+        assert "Long walk" in failed and "/dogs/activities/7/" not in failed
+    finally:
+        m.store.state.recent = []
+
+
+def test_check_finds_missing_dogs_even_with_auto_sync_off(store):
+    g = FakeGarmin(n_walks=2)
+    t = tagger(store, g)
+    t.scheduled(auto=False)  # the automatic run with auto-sync off: finds, changes nothing
+    assert [p["id"] for p in store.state.pending] == [102, 100] and g.puts == []
+    assert store.state.last_check
+    t.scheduled(auto=True)  # on: adds the dogs too
+    assert store.state.pending == [] and len(g.puts) == 2
+
+
+def test_automatic_scan_looks_back_to_the_last_one(store):
+    """The first scan reads the whole history; the next ones stop at the last scan minus 3 days."""
+    from datetime import date, timedelta
+
+    g = FakeGarmin(n_walks=0)
+    day0 = date(2026, 11, 20)
+    g.activities = [{"activityId": 1000 + i, "activityName": "Dog Walk",
+                     "startTimeLocal": f"{day0 - timedelta(days=i)} 08:00:00"} for i in range(150)]  # newest first
+    g.metadata = {a["activityId"]: {} for a in g.activities}
+    t = tagger(store, g)
+    t.check()
+    assert len(g.list_calls) == 3 and len(store.state.pending) == 150  # first scan: every page (100 + 50 + end)
+    store.state.last_check = "2026-11-20T12:00:00+00:00"
+    g.list_calls.clear()
+    found = t.check()
+    assert len(g.list_calls) == 1 and {a["id"] for a in found} == {1000, 1001, 1002, 1003}  # 17th to 20th
+    assert len(store.state.pending) == 150  # what was not looked at again stays
+
+
 def test_dogs_page_flow(hub, monkeypatch):
     c, m = hub
     page = c.get("/dogs").text
@@ -221,16 +293,24 @@ def test_dogs_page_flow(hub, monkeypatch):
 
     g = FakeGarmin()
     monkeypatch.setattr(m.garmin, "client", lambda: g)
-    assert m.run_job("preview")
+    # Check now: the activities missing their dog show up as not synced, Garmin is not changed
+    assert m.run_job("check")
+    assert g.puts == []
     page = c.get("/dogs").text
-    assert "3 activities to update" in page and "Add to 3 activities" in page
-    assert m.run_job("apply")
+    assert "3 not synced" in page and "Sync all (3)" in page and page.count("Not synced</span>") >= 3
+    assert "/dogs/activities/104/resync" in page
+    # Sync all
+    assert m.run_job("sync")
     page = c.get("/dogs").text
     assert "Done: dog added to 3 activities" in page and "3 activities have their dog" in page
-    assert "connect.garmin.com/modern/activity/104" in page
+    assert "connect.garmin.com/modern/activity/104" in page and m.store.state.pending == []
 
-    r = c.post("/dogs/autosync", data={"enabled": "true", "interval": "60"})
-    assert "Next:" in r.text and m.store.state.auto is True
+    r = c.post("/dogs/autoscan", data={"enabled": "true", "interval": "60"})
+    assert "Next:" in r.text and m.store.state.scan is True and m.store.state.interval_minutes == 60
+    r = c.post("/dogs/autosync", data={"enabled": "true"})
+    assert r.text.startswith("On:") and m.store.state.auto is True
+    r = c.post("/dogs/autoscan", data={"enabled": "false", "interval": "60"})
+    assert r.text.startswith("Off:") and m._due() is None and m.store.state.auto is True
 
 
 def test_jobs_need_garmin_and_rules(hub, monkeypatch):
@@ -308,15 +388,17 @@ def test_overview_and_activity_show_dogs(hub):
     assert "Dogs → Garmin" in page and "Rex added" in page and 'href="/activity?source=dogs" class="active"' in page
 
 
-def test_sync_now_from_the_overview(hub, monkeypatch):
+def test_check_now_from_the_overview(hub, monkeypatch):
     c, m = hub
     m.store.set_dog(REX, "Rex")
     m.store.add_rule("Dog Walk", REX)
     started = []
     monkeypatch.setattr(m, "start_job", lambda kind: started.append(kind) or True)
-    assert 'hx-post="/dogs/run/auto"' in c.get("/").text
-    r = c.post("/dogs/run/auto", headers={"HX-Request": "true"})
-    assert started == ["auto"] and "Dogs sync started" in r.headers["HX-Trigger"]
+    assert 'hx-post="/dogs/run/check"' in c.get("/").text
+    r = c.post("/dogs/run/check", headers={"HX-Request": "true"})
+    assert started == ["check"] and "Checking your whole history" in r.headers["HX-Trigger"]
+    c.post("/dogs/run/auto", headers={"HX-Request": "true"})  # the old Sync now button: a check
+    assert started == ["check", "check"]
 
 
 def test_scheduled_runs_wait_for_the_retry_of_a_failure(store):

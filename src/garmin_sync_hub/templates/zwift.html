@@ -1,14 +1,20 @@
 {% extends "base.html" %}
 {% import "partials/ui.html" as ui %}
-{% block title %}{{ "History and files" if tab == "account" else "Pairs" }} · Zwift · garmin-sync-hub{% endblock %}
+{% block title %}Zwift · garmin-sync-hub{% endblock %}
 {% block head %}
 {% if busy %}<meta http-equiv="refresh" content="5">{% endif %}
+{# Map of a pair's merged file, drawn in its card (partials/zwift_preview.html) #}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
+    .zw-map { height: 320px; border-radius: var(--radius-sm); margin-top: 8px; }
+    .zw-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 12px; }
+    .zw-stat { display: flex; flex-direction: column; font-size: 13px; }
+    .zw-stat span { color: var(--text-muted); font-size: 12px; }
+    .chart { margin-bottom: 16px; font-size: 13px; }
+    .chart svg { width: 100%; height: 120px; display: block; background: var(--bg-primary); border-radius: 6px; }
     .card { margin-bottom: 16px; }
-    .zw-actions { display: flex; gap: 6px; flex-wrap: wrap; }
     .zw-msg { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
-    .zw-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-    .zw-row .form-input { max-width: 260px; }
 </style>
 {% endblock %}
 
@@ -17,106 +23,49 @@
     <h1>Zwift</h1>
     <p>Adds the Zwift map to the activity your watch recorded, in Garmin Connect.</p>
 </div>
-{{ ui.zwift_tabs("/zwift/account" if tab == "account" else "/zwift") }}
 
 {% if not garmin_connected %}
 <div class="toast toast-error">Garmin is not connected. <a href="/settings#garmin">Connect it in Settings</a>.</div>
 {% endif %}
 
-{% if tab == "pairs" %}
 <div class="card source-top src-zwift">
     <div class="source-top-head">
         <div>
-            <div class="source-top-main">{{ merged }} map{{ '' if merged == 1 else 's' }} added{% if waiting %} · <span class="state-pending">{{ waiting }} ready</span>{% endif %}</div>
+            <div class="source-top-main">{{ merged }} map{{ '' if merged == 1 else 's' }} added{% if waiting %} · <span class="state-pending">{{ waiting }} not synced</span>{% endif %}</div>
             <div class="source-top-meta">
-                {% if last_scan %}Last sync {{ ui.local_time(last_scan) }} · {% endif %}
-                {% if cfg.auto_merge %}Automatic merge: every pair found is merged{% else %}Merge on demand: nothing changes until you click Merge{% endif %}
-                · last {{ cfg.scan_days }} days · <a href="/settings#zwift">Change</a>
+                {% if last_scan %}Last check {{ ui.local_time(last_scan) }} · {% endif %}
+                Zwift account {{ 'connected' if zwift_connected else 'not connected' }} · <a href="/settings#zwift">Settings</a>
             </div>
         </div>
         <div class="source-top-actions">
-            <button class="btn btn-primary btn-sm" hx-post="/zwift/sync-now" hx-disabled-elt="this" {% if not garmin_connected %}disabled{% endif %}
-                    title="Find pairs, fetch new Zwift rides{{ ', merge' if cfg.auto_merge }}">Sync now</button>
-            {% if waiting %}
+            <button class="btn btn-secondary btn-sm" hx-post="/zwift/check" hx-disabled-elt="this" {% if not garmin_connected or busy %}disabled{% endif %}
+                    title="Look for pairs over your whole history{{ ' and fetch the Zwift files' if zwift_connected and cfg.zwift_auto_sync }}. Nothing changes on Garmin.">{{ "Checking…" if busy else "Check now" }}</button>
             <form method="post" action="/zwift/merge-all" onsubmit="return confirm('Merge all {{ waiting }} pairs on Garmin?')">
-                <button class="btn btn-secondary btn-sm">Merge all ({{ waiting }})</button>
+                <button class="btn btn-primary btn-sm" {% if not waiting or not garmin_connected %}disabled{% endif %}>Sync all ({{ waiting }})</button>
             </form>
-            {% endif %}
         </div>
     </div>
-    {% if last_error %}<p class="source-top-error">Last sync failed: {{ last_error }}</p>{% endif %}
-
-    <div class="autosync-block">
-    {% set zw_hint = "scan" ~ (", fetch from Zwift" if cfg.zwift_auto_sync and zwift_connected else "") ~ (", merge" if cfg.auto_merge else "") %}
-    {{ ui.autosync_control("zw-autosync", "/zwift/autosync", cfg.auto_scan, cfg.scan_interval_minutes, scan_intervals, "Auto-sync", zw_hint, autosync_status|safe) }}
-    </div>
-</div>
-
-{% endif %}
-{% if tab == "account" %}
-<div class="card">
-    {% if zwift_connected %}
-    <div class="zw-row" style="justify-content: space-between;">
-        <div class="card-title">Zwift history</div>
-        <a href="/settings#zwift" class="btn btn-secondary btn-sm">Zwift account</a>
-    </div>
-    <p class="zw-msg">
-        {% if cfg.zwift_auto_sync %}New Zwift activities are fetched at each scan ({{ cfg.scan_days }} days).{% else %}Automatic fetch is off (<a href="/settings#zwift">Settings → Zwift</a>).{% endif %}
-        To catch up on older activities, sync the history from a date. Only Zwift activities that overlap a watch activity
-        without a map are downloaded; the others are skipped. Pairs found show up below: nothing changes on Garmin until you merge them.
-    </p>
-    <form method="post" action="/zwift/sync" class="zw-row" style="margin-top: 12px;">
-        <label class="form-label" style="margin: 0;">Since <input class="form-input" type="date" name="since" required value="2020-01-01"></label>
-        <button class="btn btn-primary btn-sm" {% if zs.running %}disabled{% endif %}>Sync history</button>
-    </form>
     {% set c = zs.counts or {} %}
     {% if zs.running %}
-    <p style="margin-top: 12px;">Syncing since {{ zs.since }}… {{ c.listed or 0 }} Zwift activities listed, {{ c.seen or 0 }} checked,
-        {{ c.downloaded or 0 }} downloaded, {{ c.paired or 0 }} paired. <span class="zw-msg">(the page refreshes by itself)</span></p>
-    {% elif zs.counts is not none or zs.error %}
-    <p class="zw-msg">Last sync ({% if zs.finished_at %}<time data-local data-time datetime="{{ zs.finished_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ zs.finished_at.strftime('%Y-%m-%d %H:%M') }} UTC</time>{% endif %}, since {{ zs.since }}): {{ c.listed or 0 }} listed, {{ c.downloaded or 0 }} downloaded,
-        {{ c.paired or 0 }} paired, {{ c.errors or 0 }} errors.</p>
-    {% if zs.error %}<p class="state-failed zw-msg">{{ zs.error }}</p>{% endif %}
-    {% endif %}
-    {% if zs.last %}<p class="zw-msg">{{ zs.last }}</p>{% endif %}
-    {% else %}
-    <div class="card-title">Zwift history</div>
-    <p class="zw-msg">Connect your Zwift account in <a href="/settings#zwift">Settings → Zwift</a> to fetch your Zwift FIT files
-        automatically, including your whole history. Without it, upload the files below.</p>
-    {% endif %}
+    <p class="source-top-meta" style="margin-top: 10px;"><span class="spinner" style="display: inline-block; width: 12px; height: 12px; vertical-align: -2px;"></span>
+        Zwift files: {{ c.listed or 0 }} listed, {{ c.seen or 0 }} checked, {{ c.downloaded or 0 }} downloaded, {{ c.paired or 0 }} paired{% if zs.last %} · {{ zs.last }}{% endif %}</p>
+    {% elif zs.error %}<p class="source-top-error">Zwift files: {{ zs.error }}</p>{% endif %}
+    {% if last_error %}<p class="source-top-error">Last check failed: {{ last_error }}</p>{% endif %}
+
+    <div class="autosync-block">
+    {{ ui.scan_and_sync("zw", "/zwift/autoscan", "/zwift/autosync", cfg.auto_scan, cfg.scan_interval_minutes, scan_intervals, autosync_status|safe, cfg.auto_merge, sync_line) }}
+    </div>
 </div>
 
-<div class="card">
-    <div class="card-title">Older activities</div>
-    <p class="zw-msg">Zwift copy no longer on Garmin? Upload its FIT files here, downloaded from zwift.com
-        (activity → “Download .fit”) or taken from your Strava data export (<code>activities/</code> folder,
-        <code>.fit.gz</code> accepted). Each file is paired with the watch activity without a map that overlaps it.</p>
-    <form method="post" action="/zwift/upload" enctype="multipart/form-data" class="zw-row" style="margin-top: 12px;">
-        <input type="file" name="files" accept=".fit,.gz" multiple required>
-        <button class="btn btn-secondary btn-sm">Upload</button>
-    </form>
-    {% if upload_results %}<ul class="zw-msg" style="margin: 8px 0 0 18px;">{% for r in upload_results %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}
-</div>
-
-{% endif %}
-{% if tab == "pairs" %}
-{% if total_pairs %}
 {{ ui.filter_tabs("/zwift", "status", status_filter, filter_labels, filter_counts, alert=("failed",), aria_label="Filter pairs") }}
+{% for r in rows %}{% include "partials/zwift_pair_row.html" %}{% endfor %}
+{% if not rows and total_pairs %}
+<div class="card" style="text-align: center; padding: 48px 20px;"><p style="color: var(--text-secondary); font-weight: 500;">No pair with this status</p>
+    <p style="font-size: 13px; margin-top: 4px;"><a href="/zwift">Show all</a></p></div>
+{% elif not rows %}
+<div class="card" style="text-align: center; padding: 48px 20px;"><p style="color: var(--text-secondary); font-weight: 500;">No watch + Zwift pair found yet</p>
+    <p style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">Click <b>Check now</b> to look through your whole history. Connect your Zwift account, or upload Zwift FIT files, in <a href="/settings#zwift">Settings → Zwift</a>.</p></div>
 {% endif %}
-{% if rows %}
-<div class="card" style="padding: 0; overflow-x: auto;">
-    <table>
-        <thead><tr><th>Start</th><th>Watch</th><th>Zwift</th><th>Status</th><th></th></tr></thead>
-        <tbody>
-        {% for r in rows %}{% include "partials/zwift_pair_row.html" %}{% endfor %}
-        </tbody>
-    </table>
-</div>
-{% elif total_pairs %}
-<div class="card"><p class="empty">No pair with this status. <a href="/zwift">Show all</a></p></div>
-{% else %}
-<div class="card"><p class="zw-msg">No watch + Zwift pair found yet. Connect your Zwift account in <a href="/settings#zwift">Settings → Zwift</a>, or upload Zwift FIT files in <a href="/zwift/account">History and files</a>.</p></div>
-{% endif %}
-{% with open = not total_pairs %}{% include "partials/zwift_flow.html" %}{% endwith %}
-{% endif %}
+{{ ui.pager("/zwift" ~ ("?status=" ~ status_filter if status_filter != "all" else ""), page, page_count) }}
+{{ ui.how_it_works("zwift") }}
 {% endblock %}

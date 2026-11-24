@@ -112,8 +112,8 @@
         </div>
         {% if zwift_connected %}
         <div class="form-hint" style="line-height: 1.7; margin-bottom: 12px;">
-            New Zwift activities are fetched at each scan when “Fetch new Zwift activities” is on.
-            To catch up on older ones, use <a href="/zwift/account">Zwift → History and files</a>.
+            The Zwift files are fetched at each scan when “Fetch the Zwift files at each scan” is on.
+            To catch up on older ones, click <b>Check now</b> on the <a href="/zwift">Zwift page</a>.
         </div>
         <button type="submit" form="zwift-logout" class="btn btn-secondary btn-sm">Disconnect Zwift</button>
         {% else %}
@@ -153,24 +153,7 @@
             <div class="form-hint">{{ hint }}</div>
         </div>
         {%- endmacro %}
-        {{ zw_check("auto_scan", "Auto-sync", "Scan Garmin on a schedule for watch activities that have a matching Zwift copy.") }}
-        <div class="form-grid">
-            <div class="form-group">
-                <label class="form-label" for="zw_scan_interval">Scan every</label>
-                <select class="form-select" id="zw_scan_interval" name="scan_interval_minutes" form="zwift-settings">
-                    {% for minutes in (15, 30, 60, 120, 240, 360, 720, 1440) %}
-                    <option value="{{ minutes }}" {{ 'selected' if zwift_cfg.scan_interval_minutes == minutes }}>{% if minutes < 60 %}{{ minutes }} min{% elif minutes == 60 %}1 hour{% else %}{{ minutes // 60 }} hours{% endif %}</option>
-                    {% endfor %}
-                    {% if zwift_cfg.scan_interval_minutes not in (15, 30, 60, 120, 240, 360, 720, 1440) %}<option value="{{ zwift_cfg.scan_interval_minutes }}" selected>{{ zwift_cfg.scan_interval_minutes }} min</option>{% endif %}
-                </select>
-            </div>
-            <div class="form-group">
-                <label class="form-label" for="zw_scan_days">Period scanned (days)</label>
-                <input class="form-input" type="number" id="zw_scan_days" name="scan_days" min="1" max="365" value="{{ zwift_cfg.scan_days }}" form="zwift-settings">
-            </div>
-        </div>
-        {{ zw_check("zwift_auto_sync", "Fetch new Zwift activities at each scan", "Needs the Zwift account to be connected.") }}
-        {{ zw_check("auto_merge", "Merge automatically", "Merge every detected pair without a click. Off: nothing changes on Garmin until you click Merge.") }}
+        {{ zw_check("zwift_auto_sync", "Fetch the Zwift files at each scan", "Needs the Zwift account to be connected.") }}
         {{ zw_check("delete_source", "Delete the Zwift copy after merging", "Removes the separate Zwift activity from Garmin once the merged one is uploaded.") }}
         {{ zw_check("copy_altitude", "Copy the Zwift altitude", "Also copy Zwift's virtual altitude into the watch activity.") }}
         <details class="advanced-section">
@@ -402,20 +385,69 @@
 {# Dogs: their own forms, so outside the main form #}
 {% include "partials/dogs_settings.html" %}
 
-{% if unmapped %}
-<div class="card" style="margin-top: 28px;" data-tab="liftosaur">
-    <div class="card-header">
-        <span class="card-title">Unmapped Exercises ({{ unmapped|length }})</span>
+{# How it works of each source, with its drawing (moved here from the source pages). #}
+<div data-tab="liftosaur" class="section">{% with open = false %}{% include "partials/liftosaur_flow.html" %}{% endwith %}</div>
+{% if zwift_cfg %}<div data-tab="zwift" class="section">{% with open = false, cfg = zwift_cfg %}{% include "partials/zwift_flow.html" %}{% endwith %}</div>{% endif %}
+{% with root = backup_root, s = backup_settings %}{% include "partials/backup_about.html" %}{% endwith %}
+
+{# Exercise mappings: a page of their own, opened from here (it was Liftosaur → Mappings before 1.6). #}
+<div class="card section" data-tab="liftosaur">
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+        <span class="card-title">Exercise mappings</span>
+        <a href="/settings/liftosaur/mappings" class="btn btn-secondary btn-sm">Edit mappings</a>
     </div>
-    <div class="form-hint" style="margin-bottom: 12px;">These show as "Unknown" in Garmin. Use <code>garmin-sync-hub map</code> to fix.</div>
-{% for name, count in unmapped %}
-    <div class="list-item">
-        <span style="font-size: 14px;">{{ name }} <span style="color: var(--text-muted); font-size: 12px;">({{ count }}x)</span></span>
-        <span class="badge badge-pending">unmapped</span>
+    <div class="form-hint" style="line-height: 1.7; margin-top: 8px;">
+        Which Garmin exercise each Liftosaur exercise becomes.
+        {% if unmapped %}<span class="state-pending">{{ unmapped|length }} exercise{{ '' if unmapped|length == 1 else 's' }} not mapped yet</span> (shown as “Unknown” on Garmin):
+            {% for name, count in unmapped[:8] %}{{ name }} ({{ count }}×){{ ', ' if not loop.last }}{% endfor %}{% if unmapped|length > 8 %}…{% endif %}
+        {% else %}Every exercise of your recent workouts is mapped.{% endif %}
     </div>
-    {% endfor %}
+</div>
+
+{# Auto-scan and auto-sync of each source: the same switches as on its page. #}
+{% import "partials/ui.html" as ui %}
+<div class="card section" data-tab="liftosaur">
+    <span class="card-title">Auto-scan and auto-sync</span>
+    <div class="form-hint" style="margin: 4px 0 10px;">Auto-scan finds what is new and lists it as not synced on the source page; Auto-sync then sends what a scan finds (automatic or Check now) to Garmin.</div>
+    {{ ui.scan_and_sync("set-lift", "/api/toggle-autoscan", "/api/toggle-autosync", lift_autosync.scan, lift_autosync.interval_minutes, lift_intervals, lift_autosync_line|safe, lift_autosync.enabled, sync_line(lift_autosync.enabled)) }}
+</div>
+{% if zwift_cfg %}
+<div class="card section" data-tab="zwift">
+    <span class="card-title">Auto-scan and auto-sync</span>
+    <div class="form-hint" style="margin: 4px 0 10px;">Auto-scan finds what is new and lists it as not synced on the source page; Auto-sync then sends what a scan finds (automatic or Check now) to Garmin. An automatic scan looks back to the last one that worked (3 days of margin); Check now, the whole history.</div>
+    {{ ui.scan_and_sync("set-zw", "/zwift/autoscan", "/zwift/autosync", zwift_cfg.auto_scan, zwift_cfg.scan_interval_minutes, zwift_intervals, zwift_autosync_line|safe, zwift_cfg.auto_merge, sync_line(zwift_cfg.auto_merge)) }}
+</div>
+<div class="card section" data-tab="zwift">
+    <span class="card-title">Zwift FIT files</span>
+    <div class="form-hint" style="line-height: 1.7; margin: 8px 0 12px;">No Zwift account, or a Zwift copy no longer on Garmin? Upload its FIT files, downloaded from zwift.com
+        (activity → “Download .fit”) or taken from your Strava data export (<code>activities/</code> folder, <code>.fit.gz</code> accepted).
+        Each file is paired with the watch activity without a map that overlaps it, and shows up as not synced on the Zwift page.</div>
+    <form method="post" action="/zwift/upload" enctype="multipart/form-data" style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+        <input type="file" name="files" accept=".fit,.gz" multiple required>
+        <button class="btn btn-secondary btn-sm">Upload</button>
+    </form>
+    {% if zwift_upload_results %}<ul class="form-hint" style="margin: 8px 0 0 18px;">{% for r in zwift_upload_results %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}
 </div>
 {% endif %}
+<div class="card section" data-tab="dogs">
+    <span class="card-title">Auto-scan and auto-sync</span>
+    <div class="form-hint" style="margin: 4px 0 10px;">Auto-scan looks for activities missing their dog (back to the last scan that worked, with 3 days of margin) and lists them as not synced; Auto-sync then adds the dogs.</div>
+    {{ ui.scan_and_sync("set-dogs", "/dogs/autoscan", "/dogs/autosync", dogs_state.scan, dogs_state.interval_minutes, dogs_intervals, dogs_autosync_line|safe, dogs_state.auto, sync_line(dogs_state.auto)) }}
+</div>
+<div class="card section" data-tab="backup">
+    <span class="card-title">Auto-sync</span>
+    <div class="form-hint" style="margin: 4px 0 10px;">Each run adds only what is new to the backup.</div>
+    {{ ui.autosync_control("set-bk-autosync", "/backup/autosync", backup_settings.auto, backup_settings.interval_minutes, backup_intervals, "Auto-sync", "adds only what is new", backup_autosync_line|safe) }}
+</div>
+<div class="card section" data-tab="dogs">
+    <span class="card-title">How it works</span>
+    <div class="form-hint" style="line-height: 1.7; margin-top: 8px;">
+        Each rule gives a dog to the activities whose name matches it. With auto-scan on, the app checks your new activities at its interval
+        (and your whole history with <b>Check now</b> on the Dogs page): an activity missing its dog shows up as <b>Not synced</b>.
+        <b>Sync</b> adds the dog by sending back the activity's metadata with the dog added: dogs already on it and everything else are kept.
+        <b>Restore</b> removes only the dogs this app added, and automatic runs then leave that activity alone.
+    </div>
+</div>
 <script>
 {% include "partials/garmin_login.js" %}
 

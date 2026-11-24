@@ -5,18 +5,18 @@
         <div>
             <div class="source-top-main">
                 {{ lift.synced }} synced
-                {% if lift.pending %}· <span class="state-pending" id="stat-pending">{{ lift.pending }}</span> <span class="state-pending">pending</span>{% endif %}
+                {% if lift.pending %}· <span class="state-pending" id="stat-pending">{{ lift.pending }}</span> <span class="state-pending">not synced</span>{% endif %}
                 {% if lift.failed %}· <a href="/activity?source=attention" class="state-failed">{{ lift.failed }} failed</a>{% endif %}
             </div>
             <div class="source-top-meta">
                 {% if lift.last_run %}Last sync <time data-local data-time datetime="{{ lift.last_run.time|replace(' ', 'T') }}Z">{{ lift.last_run.time }} UTC</time> ({{ lift.last_run.trigger }}) · {% endif %}
-                {{ lift.total }} workouts in Liftosaur
+                {{ lift.total }} workouts in Liftosaur · <a href="/settings#liftosaur">Settings</a>
             </div>
         </div>
         <div class="source-top-actions">
-            <button id="sync-now-btn" class="btn btn-primary btn-sm" onclick="syncNow()">
-                {% if lift.pending > 1 %}Sync {{ lift.pending }} workouts{% elif lift.pending == 1 %}Sync 1 workout{% else %}Sync now{% endif %}
-            </button>
+            <button class="btn btn-secondary btn-sm" hx-post="/api/liftosaur/check" hx-disabled-elt="this"
+                    title="Read your Liftosaur history again: new workouts show up as not synced. Nothing changes on Garmin.">Check now</button>
+            <button id="sync-now-btn" class="btn btn-primary btn-sm" onclick="syncNow()" {% if not lift.pending %}disabled{% endif %}>Sync all ({{ lift.pending }})</button>
             <button id="sync-stop-btn" class="btn btn-secondary btn-sm" onclick="stopSync()" style="display: none;">Stop</button>
         </div>
     </div>
@@ -36,7 +36,7 @@
     <div id="sync-result"></div>
 
     <div class="autosync-block">
-    {{ ui.autosync_control("autosync", "/api/toggle-autosync", lift.auto_sync.enabled, lift.auto_sync.interval_minutes, lift.autosync_intervals, "Auto-sync", "new workouts only", lift.autosync_line|safe) }}
+    {{ ui.scan_and_sync("lift", "/api/toggle-autoscan", "/api/toggle-autosync", lift.auto_sync.scan, lift.auto_sync.interval_minutes, lift.autosync_intervals, lift.autosync_line|safe, lift.auto_sync.enabled, lift.sync_line) }}
     </div>
 </div>
 <script>

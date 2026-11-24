@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 import threading
 from datetime import datetime, timedelta, timezone
@@ -34,23 +35,22 @@ STATUS_LABELS = {status: label for status, (label, _state) in ZWIFT_STATES.items
 # Filter tabs of the Pairs page: key -> (label, statuses).
 PAIR_FILTERS = {
     "all": ("All", None),
-    "waiting": ("Ready to merge", ("detected", "simulated", "queued", "running")),
+    "waiting": ("Not synced", ("detected", "simulated", "queued", "running")),
     "merged": ("Merged", ("merged",)),
     "failed": ("Failed", ("failed",)),
     "ignored": ("Ignored or restored", ("ignored", "restored")),
 }
 BUSY = ("running", "queued")
+PAGE_SIZE = 10  # cards per page, like Liftosaur → Workouts
 
 
 def filter_pairs(rows: list[dict], key: str) -> list[dict]:
     statuses = PAIR_FILTERS.get(key, PAIR_FILTERS["all"])[1]
     return rows if statuses is None else [r for r in rows if r["status"] in statuses]
 
-_PAIR_ACTIONS = ("/scan", "/merge-all")
-_ACCOUNT_ACTIONS = ("/upload", "/sync")
-_SETTINGS_ACTIONS = ("/login", "/logout")
-SETTINGS = "/settings#zwift"  # the Zwift account is connected from Settings → Zwift
-ACCOUNT = "/zwift/account"
+_PAIR_ACTIONS = ("/scan", "/merge-all", "/check", "/sync-now", "/sync")
+_SETTINGS_ACTIONS = ("/login", "/logout", "/upload")
+SETTINGS = "/settings#zwift"  # the Zwift account and file upload are in Settings → Zwift
 
 
 def _render(name: str, request: Request, **ctx) -> HTMLResponse:
@@ -90,12 +90,15 @@ def svg_chart(name: str, points: list[tuple[float, float]], invert: bool = False
 
 
 def autosync_status(m: "ZwiftModule") -> str:
-    """One line under the auto-sync switch: last and next scan (same macro as Liftosaur)."""
+    """The line under the auto-scan switch: last and next scan (same macro as the other sources)."""
     if m.state.get("syncing"):
-        return "Syncing now…"
+        return "Scanning now…"
     return templating.render_autosync_line(
-        _env, m.cfg.auto_scan, m.state["last_scan"], m.state["next_scan"],
-        "scans run only when you click “Sync now”.")
+        _env, m.cfg.auto_scan, m.state["last_scan"], m.state["next_scan"], templating.SCAN_OFF_HINT)
+
+
+# Zwift started in 2014: "Check now", and the first automatic scan, look that far back.
+HISTORY_START = datetime(2014, 1, 1, tzinfo=timezone.utc)
 
 
 class ZwiftModule:
@@ -143,26 +146,47 @@ class ZwiftModule:
             zs["finished_at"] = datetime.now(timezone.utc)
             self._sync_lock.release()
 
+    # When the last scan that worked ran, kept across restarts: the next automatic scan starts there.
+    def _scan_file(self):
+        return self.cfg.data_dir / "zwift_scan.json"
+
+    def last_ok_scan(self) -> datetime | None:
+        try:
+            return templating.fromiso(json.loads(self._scan_file().read_text()).get("last_ok"))
+        except (OSError, ValueError, AttributeError):
+            return None
+
+    def _save_ok_scan(self, when: datetime) -> None:
+        try:
+            self._scan_file().parent.mkdir(parents=True, exist_ok=True)
+            self._scan_file().write_text(json.dumps({"last_ok": when.isoformat(timespec="seconds")}))
+        except OSError as e:
+            log.warning("Could not save the time of the last Zwift scan: %s", e)
+
     def _loop(self) -> None:
         while not self._stop.is_set():
             if self.cfg.auto_scan:
                 self.run_scan()
             self._wait_for_next_scan()
 
-    def run_scan(self) -> bool:
-        """One pass (scheduled or "Sync now"): find pairs, fetch new Zwift rides, merge if
-        auto-merge is on. False when a pass is already running."""
+    def run_scan(self, full: bool = False) -> bool:
+        """One scan: find pairs and fetch the Zwift files; then, with auto-sync on, merge what was
+        found. Automatic: since the last scan that worked (minus a margin), or the whole history
+        the first time. full ("Check now"): the whole history. False when a scan is already running."""
         if not self._scan_lock.acquire(blocking=False):
             return False
-        self.state["last_scan"] = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        self.state["last_scan"] = now
         self.state["syncing"] = True
         try:
             if not self.garmin.has_tokens():
                 return True
-            self.service.scan()
+            since = HISTORY_START if full else (templating.scan_since(self.last_ok_scan()) or HISTORY_START)
+            self.service.scan(days=(now - since).days + 1)
             if self.zwift.connected() and self.cfg.zwift_auto_sync:
-                self.zwift_sync(datetime.now(timezone.utc) - timedelta(days=self.cfg.scan_days))
-            self.service.merge_pending()
+                self.zwift_sync(since)
+            self._save_ok_scan(now)
+            self.service.merge_pending()  # only when auto-sync is on
             self.state["last_error"] = None
         except Exception as e:  # noqa: BLE001
             log.exception("Zwift scan failed")
@@ -172,15 +196,16 @@ class ZwiftModule:
             self._scan_lock.release()
         return True
 
-    def sync_now(self) -> bool:
-        """Start a pass in the background (the "Sync now" button). False when one is running."""
+    def check_now(self) -> bool:
+        """Check now: scan the whole history in the background. New pairs show up as not synced
+        (merged too with auto-sync on). False when a scan is already running."""
         if self._scan_lock.locked():
             return False
-        threading.Thread(target=self.run_scan, name="zwift-sync-now", daemon=True).start()
+        threading.Thread(target=self.run_scan, kwargs={"full": True}, name="zwift-check-now", daemon=True).start()
         return True
 
     def _due(self) -> datetime | None:
-        """When the next automatic scan runs, or None when auto-sync is off."""
+        """When the next automatic scan runs, or None when auto-scan is off."""
         if not self.cfg.auto_scan:
             return None
         last = self.state["last_scan"]
@@ -232,7 +257,7 @@ class ZwiftModule:
             "merged": sum(1 for r in rows if r["status"] == "merged"),
             "failed": sum(1 for r in rows if r["status"] == "failed"),
             "zwift_connected": self.zwift.connected(),
-            "auto_merge": self.cfg.auto_merge,
+            "auto_merge": self.cfg.auto_merge,  # auto-sync: pairs found are merged without a click
             "auto_scan": self.cfg.auto_scan,
             "scan_interval_minutes": self.cfg.scan_interval_minutes,
             "last_scan": self.state["last_scan"],
@@ -247,7 +272,7 @@ class ZwiftModule:
         router = APIRouter(prefix="/zwift")
         m = self
 
-        for paths, target in ((_PAIR_ACTIONS, "/zwift"), (_ACCOUNT_ACTIONS, ACCOUNT), (_SETTINGS_ACTIONS, SETTINGS)):
+        for paths, target in ((_PAIR_ACTIONS, "/zwift"), (_SETTINGS_ACTIONS, SETTINGS)):
             for path in paths:
                 router.add_api_route(path, lambda target=target: RedirectResponse(target, status_code=303),
                                      methods=["GET"], include_in_schema=False)
@@ -257,27 +282,30 @@ class ZwiftModule:
                     "can_restore": m.service.can_restore, "auto_retry": m.cfg.auto_merge and m.cfg.auto_scan,
                     "max_attempts": retry.MAX_ATTEMPTS, "parse_time": retry.parse}
 
-        def render_tab(request: Request, tab: str) -> HTMLResponse:
+        def render_page(request: Request) -> HTMLResponse:
             all_rows = m.store.all()
             status = request.query_params.get("status", "all")
             if status not in PAIR_FILTERS:
                 status = "all"
             rows = filter_pairs(all_rows, status)
-            # Pairs being merged refresh their own row; only the account sync reloads the page.
-            busy = m.state["zwift"]["running"] if tab == "account" else False
-            results = m.state["upload_results"] if tab == "account" else []
-            if tab == "account":
-                m.state["upload_results"] = []
+            try:
+                page = max(1, int(request.query_params.get("page", 1)))
+            except ValueError:
+                page = 1
+            page_count = max(1, -(-len(rows) // PAGE_SIZE))
+            page = min(page, page_count)
+            rows = rows[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
             return _render(
-                "zwift.html", request, tab=tab, cfg=m.cfg, rows=rows, busy=busy,
-                total_pairs=len(all_rows), status_filter=status,
+                "zwift.html", request, cfg=m.cfg, rows=rows, busy=m.state["syncing"],
+                total_pairs=len(all_rows), status_filter=status, page=page, page_count=page_count,
                 filter_labels={k: label for k, (label, _s) in PAIR_FILTERS.items()},
                 filter_counts={k: len(filter_pairs(all_rows, k)) for k in PAIR_FILTERS},
                 waiting=sum(1 for r in all_rows if r["status"] in ("detected", "simulated")),
                 merged=sum(1 for r in all_rows if r["status"] == "merged"), last_scan=m.state["last_scan"],
                 garmin_connected=m.garmin.has_tokens(), zwift_connected=m.zwift.connected(),
-                zs=m.state["zwift"], last_error=m.state["last_error"], upload_results=results,
-                scan_intervals=SCAN_INTERVALS, autosync_status=autosync_status(m), **pair_ctx(),
+                zs=m.state["zwift"], last_error=m.state["last_error"],
+                scan_intervals=SCAN_INTERVALS, autosync_status=autosync_status(m),
+                sync_line=templating.sync_line(m.cfg.auto_merge), **pair_ctx(),
             )
 
         def render_row(request: Request, target_id: int) -> HTMLResponse:
@@ -288,22 +316,29 @@ class ZwiftModule:
 
         @router.get("", response_class=HTMLResponse)
         def page(request: Request) -> HTMLResponse:
-            return render_tab(request, "pairs")
+            return render_page(request)
 
-        @router.get("/account", response_class=HTMLResponse)
-        def account_page(request: Request) -> HTMLResponse:
-            return render_tab(request, "account")
+        @router.get("/account")
+        def account_page() -> RedirectResponse:
+            """The old "History and files" page: the Zwift account and file upload are in Settings → Zwift."""
+            return RedirectResponse(SETTINGS, status_code=303)
 
-        @router.post("/sync-now")
-        def sync_now(request: Request):
+        @router.post("/check")
+        def check(request: Request):
+            """Check now: look for pairs over the whole history. Nothing changes on Garmin."""
             if not m.garmin.has_tokens():
                 raise HTTPException(409, "Connect Garmin first (Settings → Garmin).")
-            started = m.sync_now()
-            message = ("Zwift sync started: new pairs show up on the Zwift page." if started
-                       else "A Zwift sync is already running.")
+            started = m.check_now()
+            message = ("Checking your whole history: new pairs show up as not synced." if started
+                       else "A Zwift check is already running.")
             if request.headers.get("HX-Request"):
-                return HTMLResponse("", headers=templating.notice_headers(message, "success" if started else "info"))
+                return HTMLResponse("", headers={**templating.notice_headers(message, "success" if started else "info"),
+                                                 "HX-Refresh": "true"})
             return RedirectResponse("/zwift", status_code=303)
+
+        # Before 1.6: "Sync now" (Overview) and "Sync history" (History and files) are now Check now.
+        for old in ("/sync-now", "/sync"):
+            router.add_api_route(old, check, methods=["POST"], include_in_schema=False)
 
         @router.post("/scan")
         def scan() -> RedirectResponse:
@@ -338,21 +373,32 @@ class ZwiftModule:
             m.settings_changed()
             return RedirectResponse("/settings?saved=zwift#zwift", status_code=303)
 
-        @router.post("/autosync", response_class=HTMLResponse)
-        def autosync(enabled: str = Form("false"), interval: str = Form("")) -> HTMLResponse:
-            values: dict = {"auto_scan": enabled}
-            if interval:
-                values["scan_interval_minutes"] = interval
+        def save(values: dict) -> str | None:
             try:
                 m.cfg.update(values)
                 m.cfg.save()
             except (ValueError, OSError) as e:
-                return HTMLResponse(f"<span class='st-failed'>{html.escape(str(e))}</span>")
+                return f"<span class='state-failed'>{html.escape(str(e))}</span>"
             m.settings_changed()
-            return HTMLResponse(autosync_status(m))
+            return None
+
+        @router.post("/autoscan", response_class=HTMLResponse)
+        def autoscan(enabled: str = Form("false"), interval: str = Form("")) -> HTMLResponse:
+            """Auto-scan switch and interval: look for new pairs on a schedule."""
+            values: dict = {"auto_scan": enabled}
+            if interval:
+                values["scan_interval_minutes"] = interval
+            return HTMLResponse(save(values) or autosync_status(m))
+
+        @router.post("/autosync", response_class=HTMLResponse)
+        def autosync(enabled: str = Form("false")) -> HTMLResponse:
+            """Auto-sync switch: merge the pairs a scan finds without a click."""
+            error = save({"auto_merge": enabled})
+            return HTMLResponse(error or templating.sync_line(m.cfg.auto_merge))
 
         @router.post("/upload")
         async def upload(files: list[UploadFile] = File(...)) -> RedirectResponse:
+            """Zwift FIT files uploaded from Settings → Zwift (no Zwift account, or a Strava export)."""
             results = []
             for f in files[:200]:
                 data = await f.read()
@@ -365,7 +411,7 @@ class ZwiftModule:
                     log.exception("Upload of %s failed", f.filename)
                     results.append(f"{f.filename}: error ({e})")
             m.state["upload_results"] = results
-            return RedirectResponse(ACCOUNT, status_code=303)
+            return RedirectResponse(SETTINGS, status_code=303)
 
         @router.post("/login")
         def zwift_login(email: str = Form(...), password: str = Form(...)) -> RedirectResponse:
@@ -380,16 +426,6 @@ class ZwiftModule:
         def zwift_logout() -> RedirectResponse:
             m.zwift.logout()
             return RedirectResponse("/settings?saved=zwift-disconnected#zwift", status_code=303)
-
-        @router.post("/sync")
-        def zwift_sync_route(since: str = Form(...)) -> RedirectResponse:
-            try:
-                start = datetime.fromisoformat(since).replace(tzinfo=timezone.utc)
-            except ValueError:
-                raise HTTPException(400, "invalid date")
-            if m.zwift.connected() and m.garmin.has_tokens():
-                threading.Thread(target=m.zwift_sync, args=(start,), daemon=True).start()
-            return RedirectResponse(ACCOUNT, status_code=303)
 
         @router.post("/pairs/{target_id}/{action}")
         def act(request: Request, target_id: int, action: str):
@@ -423,17 +459,21 @@ class ZwiftModule:
             return FileResponse(path, filename=f"{target_id}_merged.fit", media_type="application/octet-stream")
 
         @router.get("/pairs/{target_id}/preview", response_class=HTMLResponse)
-        def preview(request: Request, target_id: int) -> HTMLResponse:
+        def preview(request: Request, target_id: int):
+            """Map, stats and charts of the merged file, loaded into the pair's card when opened.
+            Opened as a page (an old link): the Pairs page, on this pair's card."""
             row = m.store.get(target_id)
             if not row:
                 raise HTTPException(404)
+            if not request.headers.get("HX-Request"):
+                return RedirectResponse(f"/zwift#pair-{target_id}", status_code=303)
             path = m.cfg.backup_dir / str(target_id) / f"{target_id}_merged.fit"
             if not path.exists():
-                return _render("zwift_preview.html", request, row=row, has_file=False, pv=summarize_empty(),
+                return _render("partials/zwift_preview.html", request, row=row, has_file=False, pv=summarize_empty(),
                                charts=[], delete_source=m.cfg.delete_source)
             pv = summarize(path.read_bytes())
             charts = [svg_chart(n, pts, invert=n.startswith("Pace")) for n, pts in pv.series.items()]
-            return _render("zwift_preview.html", request, row=row, has_file=True, pv=pv, charts=charts,
+            return _render("partials/zwift_preview.html", request, row=row, has_file=True, pv=pv, charts=charts,
                            delete_source=m.cfg.delete_source)
 
         return router

@@ -15,7 +15,7 @@
         <rect x="10" y="80" width="150" height="62" rx="8" fill="rgba(99,102,241,0.1)" stroke="rgba(99,102,241,0.35)"/>
         <line x1="10" y1="83" x2="160" y2="83" stroke="#6366f1" stroke-width="3"/>
         <text x="85" y="108" text-anchor="middle" fill="#818cf8" font-size="13" font-weight="700">Liftosaur API</text>
-        <text x="85" y="125" text-anchor="middle" fill="#64748b" font-size="10">{% if flow.auto_sync %}Fetch every {{ flow.interval|interval_label }}{% else %}Fetch on Sync now{% endif %}</text>
+        <text x="85" y="125" text-anchor="middle" fill="#64748b" font-size="10">{% if flow.auto_sync %}Scan every {{ flow.interval|interval_label }}{% else %}Scan on Check now{% endif %}</text>
         <line x1="163" y1="111" x2="195" y2="111" stroke="#64748b" stroke-width="1.5" marker-end="url(#lf-arrow)"/>
 
         <!-- 2. Map exercises -->
@@ -81,8 +81,7 @@
     </svg>
     </div>
     <p class="pipeline-note">
-        A workout already synced is skipped; a failed one is tried again later{% if not flow.auto_sync %} with auto-sync on{% endif %}.
+        A workout already synced is skipped; a failed one is tried again later with auto-sync on.
         Sets are timed with your settings ({{ flow.working_set }} s per set, {{ flow.rest_sets }} s of rest). An upload can be undone from this page.
-        <a href="/settings#liftosaur">Change these options</a>
     </p>
 </details>

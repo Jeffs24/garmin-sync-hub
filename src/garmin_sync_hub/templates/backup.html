@@ -2,6 +2,20 @@
 {% import "partials/ui.html" as ui %}
 {% block title %}Backup · garmin-sync-hub{% endblock %}
 
+{% block head %}
+<style>
+    .inv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 12px; }
+    .inv-tile { padding: 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: rgba(255,255,255,0.02); }
+    .inv-name { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .inv-main { font-size: 20px; font-weight: 700; margin: 2px 0; font-variant-numeric: tabular-nums; }
+    .inv-meta { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+    .inv-tile details summary { cursor: pointer; font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+    .inv-tile ul, .run-list { margin: 6px 0 0 16px; font-size: 12px; color: var(--text-secondary); line-height: 1.7; }
+    .run-list { max-height: 260px; overflow-y: auto; }
+    .run-act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
     <h1>Backup</h1>
@@ -14,25 +28,108 @@
 
 {% include "partials/backup_status.html" %}
 
-<div class="card" style="margin-bottom: 16px;">
-    <div class="card-title" style="margin-bottom: 8px;">Where it goes</div>
-    <ul style="margin: 0 0 0 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.8;">
-        <li>Folder on the server: <code>{{ root }}</code>{% if root|string == "/backup" %} (the <code>./garmin-backup</code> folder next to <code>docker-compose.yml</code>){% endif %}.</li>
-        <li>{% if s.rclone_remote %}Copied after each backup to <b>{{ s.rclone_remote }}</b> with rclone.{% else %}Not copied elsewhere. Google Drive, OneDrive, Dropbox, a NAS… can be added in <a href="/settings#backup">Settings → Backup</a>.{% endif %}</li>
-        <li>As a zip file, with the button above.</li>
-    </ul>
+{# ── What the backup holds now, per category ── #}
+{% set inv = inventory %}
+<div class="card src-backup" style="margin-bottom: 16px;">
+    <div class="card-title">In the backup</div>
+    {% if inv and inv.activities %}
+    <div class="inv-meta">{{ (inv.size or 0)|filesize }} in all{% if inv.at %} · counted {{ ui.local_time(inv.at|fromiso) }}{% endif %}</div>
+    <div class="inv-grid">
+        {% set a = inv.activities %}
+        <div class="inv-tile">
+            <div class="inv-name">Activities</div>
+            <div class="inv-main">{{ a.total }}</div>
+            <div class="inv-meta">{{ a.with_file }} with their original file · {{ (a.size or 0)|filesize }}</div>
+            {% if a.by_category %}<details><summary>By category ({{ a.by_category|length }})</summary>
+                <ul>{% for name, n in a.by_category.items() %}<li>{{ name.replace('_', ' ') }}: {{ n }}</li>{% endfor %}</ul></details>{% endif %}
+            {% if a.by_year %}<details><summary>By year ({{ a.by_year|length }})</summary>
+                <ul>{% for year, n in a.by_year.items() %}<li>{{ year }}: {{ n }}</li>{% endfor %}</ul></details>{% endif %}
+        </div>
+        {% set h = inv.health or {} %}
+        <div class="inv-tile">
+            <div class="inv-name">Health data</div>
+            <div class="inv-main">{{ h.days or 0 }} day{{ '' if h.days == 1 else 's' }}</div>
+            <div class="inv-meta">{% if h.first %}{{ h.first }} → {{ h.last }} · {% endif %}{{ (h.size or 0)|filesize }}{% if not s.health %} · off in <a href="/settings#backup">Settings</a>{% endif %}</div>
+            {% if h.metrics %}<details><summary>Per metric ({{ h.metrics|length }})</summary>
+                <ul>{% for name, n in h.metrics.items() %}<li>{{ name.replace('_', ' ') }}: {{ n }} day{{ '' if n == 1 else 's' }}</li>{% endfor %}</ul></details>{% endif %}
+        </div>
+        <div class="inv-tile">
+            <div class="inv-name">History per year</div>
+            <div class="inv-main">{{ inv.history|length }} kind{{ '' if inv.history|length == 1 else 's' }}</div>
+            <div class="inv-meta">Calendar, body composition, weigh-ins, scores…</div>
+            {% if inv.history %}<details><summary>Years saved</summary>
+                <ul>{% for name, years in inv.history.items() %}<li>{{ name.replace('_', ' ') }}: {{ years|join(', ') }}</li>{% endfor %}</ul></details>{% endif %}
+        </div>
+        <div class="inv-tile">
+            <div class="inv-name">Account</div>
+            <div class="inv-main">{{ inv.account|length }} file{{ '' if inv.account|length == 1 else 's' }}</div>
+            <div class="inv-meta">{{ inv.devices|length }} device{{ '' if inv.devices|length == 1 else 's' }} with their settings</div>
+            {% if inv.account %}<details><summary>Files</summary>
+                <ul>{% for name in inv.account %}<li>{{ name.replace('_', ' ') }}</li>{% endfor %}</ul></details>{% endif %}
+        </div>
+        <div class="inv-tile">
+            <div class="inv-name">Gear</div>
+            <div class="inv-main">{{ inv.gear|length }}</div>
+            <div class="inv-meta">Active and retired, with totals</div>
+            {% if inv.gear %}<details><summary>Names</summary>
+                <ul>{% for name in inv.gear %}<li>{{ name }}</li>{% endfor %}</ul></details>{% endif %}
+        </div>
+        <div class="inv-tile">
+            <div class="inv-name">Workouts and courses</div>
+            <div class="inv-main">{{ inv.workouts }} · {{ inv.courses }}</div>
+            <div class="inv-meta">{{ inv.workouts }} workout{{ '' if inv.workouts == 1 else 's' }} and {{ inv.courses }} course{{ '' if inv.courses == 1 else 's' }}, as FIT files</div>
+        </div>
+    </div>
+    {% else %}
+    <p class="hist-note">Nothing yet: run a backup and its content shows up here, per category.</p>
+    {% endif %}
 </div>
 
-<details class="card">
-    <summary class="card-title" style="cursor: pointer;">What is saved</summary>
-    <ul style="margin: 12px 0 0 18px; font-size: 13px; color: var(--text-secondary); line-height: 1.8;">
-        <li><b>activities/</b>: every activity as the file Garmin keeps (FIT for watch activities), sorted by category and year, plus Garmin's summary (.json) and <code>index.csv</code>. Re-import a file in Garmin Connect with Import Data.</li>
-        <li><b>account/</b>: profile, settings, devices, personal records, goals, heart rate zones.</li>
-        <li><b>gear/</b>: all your gear, active and retired, with its totals (distance, time), its default activity types and the activities it was used in.</li>
-        <li><b>workouts/</b> and <b>courses/</b>: as FIT files (and GPX for courses).</li>
-        <li><b>history/</b>: one file per year for the calendar, body composition, weigh-ins, blood pressure, endurance and hill scores, race predictions.</li>
-        <li><b>health/</b>{% if not s.health %} (off in <a href="/settings#backup">Settings</a>){% endif %}: one file per metric and per day (daily summary, sleep, HRV, heart rate, stress, Body Battery, steps, SpO2, respiration, training readiness, VO2 max, weight…){% if s.health_since %} since {{ s.health_since }}{% else %} since your first activity{% endif %}, plus <code>daily_summary.csv</code>.</li>
-    </ul>
-    <p class="pipeline-note">A file already saved is never downloaded again, so each run only adds what is new. The first run is long: Garmin limits how fast data can be read, and an interrupted run resumes where it stopped.</p>
-</details>
+{# ── Each backup run, with what it added: same tabs, cards and pager as the other pages ── #}
+{{ ui.filter_tabs("/backup", "status", status_filter, filter_labels, filter_counts, alert=("failed",), aria_label="Filter backups") }}
+
+{% for r in runs %}
+{% set new = r.new or {"activities": r.activities_new or 0, "health_days": r.health_days_new or 0} %}
+{% set parts = [] %}
+{% for key, label in added_labels.items() %}{% if new.get(key) %}{% set _ = parts.append(new[key] ~ " " ~ (label[0] if new[key] == 1 else label[1])) %}{% endif %}{% endfor %}
+{% set badge = {"new": ("ok", "New data saved"), "uptodate": ("muted", "Up to date"),
+                "failed": ("muted", "Stopped") if r.stopped else ("failed", "Failed")}[r.state] %}
+{% set meta %}{{ parts|join(" · ") if parts else ("Nothing new" if r.ok else (r.error or "")) }}{% if r.warnings %} · {{ r.warnings }} item{{ '' if r.warnings == 1 else 's' }} not saved (retried next time){% endif %}{% endset %}
+{% set title %}Backup of {{ ui.local_time(r.at|fromiso) if r.at else "?" }}{% endset %}
+{% call ui.history_card("run-" ~ loop.index ~ "-" ~ page, "backup", title, [badge], meta, "") %}
+    {% if r.state == "failed" and r.error and parts %}<div class="state-failed">{{ r.error }}</div>{% endif %}
+    {% set added = r.added or {} %}
+    {% if added.activities %}
+    <details {% if added.activities|length <= 5 %}open{% endif %}><summary style="cursor: pointer;">Activities added ({{ new.activities }})</summary>
+        <ul class="run-list" style="list-style: none; margin-left: 0;">
+        {% for act in added.activities %}
+            <li class="run-act">
+                <span>{{ act.start.replace('T', ' ') }} · <b>{{ act.name or ("#" ~ act.id) }}</b>{% if act.type %} <span style="color: var(--text-muted);">({{ act.type.replace('_', ' ') }})</span>{% endif %}</span>
+                {{ ui.history_actions(garmin="https://connect.garmin.com/modern/activity/" ~ act.id, fit="/backup/activities/" ~ act.id ~ "/file",
+                                      resync_off="A backup run saves new activities only", restore_off="The backup never changes Garmin") }}
+            </li>
+        {% endfor %}
+        {% if new.activities > added.activities|length %}<li class="hist-note">… and {{ new.activities - added.activities|length }} more</li>{% endif %}
+        </ul>
+    </details>
+    {% endif %}
+    {% for key in ("health_days", "history", "gear", "workouts", "courses") %}{% if added.get(key) %}
+    <details><summary style="cursor: pointer;">{{ added_labels[key][1]|capitalize }} added ({{ new[key] }})</summary>
+        <ul class="run-list">{% for item in added[key] %}<li>{{ item }}</li>{% endfor %}
+        {% if new[key] > added[key]|length %}<li class="hist-note">… and {{ new[key] - added[key]|length }} more</li>{% endif %}</ul>
+    </details>
+    {% endif %}{% endfor %}
+    {% if parts and not added %}<div class="hist-note">The detail of what was added is kept for backups made since version 1.6.</div>{% endif %}
+{% endcall %}
+{% endfor %}
+
+{% if not runs %}
+<div class="card" style="text-align: center; padding: 48px 20px;">
+    <p style="color: var(--text-secondary); font-weight: 500;">{{ "No backup with this status" if total_runs else "No backup yet" }}</p>
+    {% if total_runs %}<p style="font-size: 13px; margin-top: 4px;"><a href="/backup">Show all</a></p>{% endif %}
+</div>
+{% endif %}
+
+{{ ui.pager("/backup" ~ ("?status=" ~ status_filter if status_filter != "all" else ""), page, page_count) }}
+{{ ui.how_it_works("backup") }}
 {% endblock %}

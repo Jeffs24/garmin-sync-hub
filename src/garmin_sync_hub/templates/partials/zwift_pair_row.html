@@ -1,44 +1,57 @@
-{# One row of the Zwift Pairs table. Needs `r` (a pair) and pair_ctx() from zwift/web.py.
-   Actions post with HTMX and swap this row; a row being worked on refreshes itself until it is done. #}
+{# One Zwift pair, as the same card as every history list (ui.history_card). Needs `r` (a pair) and
+   pair_ctx() from zwift/web.py. Actions post with HTMX and swap this card; a pair being worked on
+   refreshes itself until it is done. #}
 {% import "partials/ui.html" as ui %}
 {% set busy = r.status in ('running', 'queued') %}
 {% set row_url = "/zwift/pairs/" ~ r.target_id %}
-<tr id="pair-{{ r.target_id }}"
-    {% if busy %}hx-get="{{ row_url }}/row" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
-    <td style="color: var(--text-muted); font-size: 13px; white-space: nowrap;">
-        {% if r.start_utc %}<time data-local data-time datetime="{{ r.start_utc }}">{{ r.start_utc[:16].replace('T', ' ') }} UTC</time>{% endif %}
-    </td>
-    <td><div style="font-weight: 600;">{{ r.target_name }}</div><div class="zw-msg">#{{ r.target_id }}</div></td>
-    <td>{{ r.source_name }}{% if r.source_id %}<div class="zw-msg">#{{ r.source_id }}</div>{% endif %}</td>
-    <td>
-        {% set state = status_states.get(r.status, (r.status, 'muted'))[1] %}
-        {% if busy %}{% call ui.status_badge(state, status_labels.get(r.status, r.status)) %}<span class="spinner" style="width: 10px; height: 10px;"></span>{% endcall %}
-        {% else %}{{ ui.status_badge(state, status_labels.get(r.status, r.status)) }}{% endif %}
-        {% if r.new_id %}<div><a href="https://connect.garmin.com/modern/activity/{{ r.new_id }}" target="_blank" rel="noopener">View on Garmin &nearr;</a></div>{% endif %}
-        {% if r.message %}<div class="zw-msg">{{ r.message }}</div>{% endif %}
-        {% if r.status == 'failed' %}
-            {% if auto_retry and r.retry_at %}<div class="zw-msg">Next try with auto-merge: {{ ui.local_time(parse_time(r.retry_at)) }}</div>
-            {% elif r.attempts and r.attempts >= max_attempts %}<div class="zw-msg">Failed {{ r.attempts }} times in a row: click Merge to try again.</div>
-            {% else %}<div class="zw-msg">Click Merge to try again.</div>{% endif %}
-        {% endif %}
-    </td>
-    <td>
-        <div class="zw-actions">
-        {% set hx = 'hx-target="closest tr" hx-swap="outerHTML" hx-disabled-elt="this"' %}
-        {% if r.status in ('detected', 'simulated', 'failed', 'ignored') %}
-            <button class="btn btn-secondary btn-sm" hx-post="{{ row_url }}/simulate" {{ hx|safe }}>Simulate</button>
-            <button class="btn btn-primary btn-sm" hx-post="{{ row_url }}/merge" {{ hx|safe }}
-                    hx-confirm="Replace the watch activity on Garmin with the merged one?">Merge</button>
-            {% if r.status != 'ignored' %}<button class="btn btn-secondary btn-sm" hx-post="{{ row_url }}/ignore" {{ hx|safe }}>Ignore</button>{% endif %}
-        {% endif %}
-        {% if r.status in ('simulated', 'merged') %}
-            <a class="btn btn-secondary btn-sm" href="{{ row_url }}/preview">Preview</a>
-            <a class="btn btn-secondary btn-sm" href="{{ row_url }}/merged.fit">FIT</a>
-        {% endif %}
-        {% if r.status == 'merged' and r.new_id and can_restore(r.target_id) %}
-            <button class="btn btn-secondary btn-sm" hx-post="{{ row_url }}/restore" {{ hx|safe }} title="Undo the merge from the backups"
-                    hx-confirm="Bring back the original watch activity (without the map) and delete the merged one on Garmin?">Restore</button>
-        {% endif %}
+{% set hx = 'hx-target="closest .hist-card" hx-swap="outerHTML" hx-disabled-elt="this"' %}
+{% set state = status_states.get(r.status, (r.status, 'muted'))[1] %}
+{% set garmin_id = r.new_id if r.status == 'merged' and r.new_id else r.target_id %}
+
+{% if r.status in ('detected', 'simulated', 'failed', 'ignored') %}
+    {% set resync = {"label": "Merge", "title": "Replace the watch activity on Garmin with the one that has the Zwift map",
+                     "attrs": 'hx-post="' ~ row_url ~ '/merge" ' ~ hx ~ ' hx-confirm="Replace the watch activity on Garmin with the merged one?"'} %}
+{% else %}{% set resync = none %}{% endif %}
+{% if r.status == 'merged' and r.new_id and can_restore(r.target_id) %}
+    {% set restore = {"title": "Undo the merge from the backups",
+                      "attrs": 'hx-post="' ~ row_url ~ '/restore" ' ~ hx ~ ' hx-confirm="Bring back the original watch activity (without the map) and delete the merged one on Garmin?"'} %}
+{% else %}{% set restore = none %}{% endif %}
+{% set extra %}
+    {% if r.status in ('detected', 'simulated', 'failed', 'ignored') %}
+    <button type="button" class="chip" hx-post="{{ row_url }}/simulate" {{ hx|safe }} title="Build the merged file without changing Garmin">Simulate</button>
+    {% endif %}
+    {% if r.status in ('detected', 'simulated', 'failed') %}
+    <button type="button" class="chip" hx-post="{{ row_url }}/ignore" {{ hx|safe }} title="Leave this pair as it is">Ignore</button>
+    {% endif %}
+{% endset %}
+{% set actions = ui.history_actions(
+    garmin="https://connect.garmin.com/modern/activity/" ~ garmin_id,
+    resync=resync, resync_off=("Working on it…" if busy else "Already merged: Restore first to merge again" if r.status == 'merged' else "Nothing to merge"),
+    restore=restore, restore_off=("Only a merged pair with its backups can be restored"),
+    fit=(row_url ~ "/merged.fit") if r.status in ('simulated', 'merged') else none, fit_off="Simulate or merge first: the merged FIT file is made then",
+    extra=extra) %}
+{% set meta %}{% if r.start_utc %}<time data-local data-time datetime="{{ r.start_utc }}">{{ r.start_utc[:16].replace('T', ' ') }} UTC</time> &middot; {% endif %}Zwift: {{ r.source_name or "file" }}{% if r.source_id %} (#{{ r.source_id }}){% endif %} &middot; watch #{{ r.target_id }}{% endset %}
+{% set attrs = ('hx-get="' ~ row_url ~ '/row" hx-trigger="every 3s" hx-swap="outerHTML"') if busy else "" %}
+{% call ui.history_card("pair-" ~ r.target_id, "zwift", r.target_name, [(state, status_labels.get(r.status, r.status))], meta, actions, attrs) %}
+    {% if busy %}<div class="hist-note"><span class="spinner" style="width: 10px; height: 10px; display: inline-block;"></span> Working on it…</div>{% endif %}
+    {% if r.message %}<div class="hist-note">{{ r.message }}</div>{% endif %}
+    {% if r.status == 'failed' %}
+        {% if auto_retry and r.retry_at %}<div class="hist-note">Next try with auto-merge: {{ ui.local_time(parse_time(r.retry_at)) }}</div>
+        {% elif r.attempts and r.attempts >= max_attempts %}<div class="hist-note">Failed {{ r.attempts }} times in a row: click Merge to try again.</div>
+        {% else %}<div class="hist-note">Click Merge to try again.</div>{% endif %}
+    {% endif %}
+    {% if r.status in ('simulated', 'merged') %}
+    {# Loaded the first time it is opened, like the heart rate timeline of a workout. #}
+    <details class="cal-detail" hx-get="{{ row_url }}/preview" hx-trigger="toggle once" hx-target="find .cal-detail-content" hx-swap="innerHTML">
+        <summary>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--src-zwift)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+            Map and charts
+            <span style="color: var(--text-muted); font-size: 11px; margin-left: 4px;">({{ "on Garmin" if r.status == 'merged' else "merged file, not on Garmin yet" }})</span>
+            <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </summary>
+        <div class="cal-detail-content">
+            <div style="text-align: center; color: var(--text-muted); font-size: 13px; padding: 20px;"><span class="spinner" style="display: inline-block; margin-right: 8px;"></span>Reading the merged file…</div>
         </div>
-    </td>
-</tr>
+    </details>
+    {% endif %}
+{% endcall %}

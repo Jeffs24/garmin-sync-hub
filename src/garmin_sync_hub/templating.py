@@ -26,6 +26,29 @@ def render_autosync_line(env: Environment, enabled: bool, last, next_, manual_hi
     return template.render(enabled=enabled, last=last, next=next_, hint=manual_hint)
 
 
+# Auto-scan finds what is new and lists it as not synced; auto-sync sends what a scan finds to
+# Garmin. The same words on every source page and in Settings.
+SCAN_OFF_HINT = "scans run only when you click “Check now”."
+SYNC_ON_LINE = "On: what a scan finds is sent to Garmin right away."
+SYNC_OFF_LINE = "Off: what a scan finds waits in “Not synced” for a click on Sync."
+# An automatic scan looks back to the last one that worked, plus this margin (a watch synced late,
+# a Zwift copy that reaches Garmin after the session). Without one yet: the whole history.
+SCAN_MARGIN_DAYS = 3
+
+
+def sync_line(enabled: bool) -> str:
+    return SYNC_ON_LINE if enabled else SYNC_OFF_LINE
+
+
+def scan_since(last_ok):
+    """Start of an automatic scan: the last scan that worked (aware datetime or ISO text) minus
+    the margin, or None for the whole history."""
+    from datetime import timedelta
+
+    last = fromiso(last_ok) if isinstance(last_ok, str) else last_ok
+    return last - timedelta(days=SCAN_MARGIN_DAYS) if last else None
+
+
 def filesize(size: int | float | None) -> str:
     """1536 -> "1.5 KB"."""
     size = float(size or 0)

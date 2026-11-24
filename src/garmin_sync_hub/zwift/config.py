@@ -22,7 +22,6 @@ SCAN_INTERVALS = (15, 30, 60, 120, 240, 360, 720, 1440)
 EDITABLE: dict[str, type] = {
     "auto_scan": bool,
     "scan_interval_minutes": int,
-    "scan_days": int,
     "zwift_auto_sync": bool,
     "auto_merge": bool,
     "delete_source": bool,
@@ -60,6 +59,8 @@ class Config:
     min_position_ratio: float = 0.5
     time_tolerance_s: int = 2
     zwift_auto_sync: bool = True
+    # Auto-scan: look for new pairs every scan_interval_minutes (they show up as not synced).
+    # Auto-sync is auto_merge: merge what a scan finds without a click.
     auto_scan: bool = True
     # How a Zwift copy is recognized: its device name, and its FIT manufacturer (260 = Zwift).
     source_names: list[str] = field(default_factory=lambda: ["zwift"])
